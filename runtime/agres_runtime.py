@@ -653,20 +653,13 @@ def set_active_session_id(session_id: Optional[str]) -> None:
 
 
 def _repair_active_session() -> None:
-    # P0 fix: if runtime_state points to non-existent session, clear it and heal DB
-    sid = active_session_id()
-    if not sid:
-        return
-    try:
-        conn = sqlite3.connect(str(db_path()), timeout=2.0)
-        conn.row_factory = sqlite3.Row
-        row = conn.execute("SELECT id FROM sessions WHERE id = ?", (sid,)).fetchone()
-        conn.close()
-        if row is None:
-            # Check if events exist for that sid (orphaned) - clear to avoid zombie
-            set_active_session_id(None)
-    except Exception:
-        pass
+    # ponytail: never auto-clear active_session_id. Sessions live in per-project
+    # dbs we cannot enumerate from a global command; clearing here caused
+    # 'budget not updating' (project session silently dropped). Stale ids are
+    # harmless: commands resolve data by session_id string. Explicit clears:
+    #   agres end            (marks ended + clears)
+    #   agres repair --reset-session (manual override)
+    return
 
 def session_dir(session_id: Optional[str] = None) -> Optional[Path]:
     session_id = session_id or active_session_id()
@@ -1044,13 +1037,49 @@ def estimate_tokens(text: str) -> int:
 
 
 def window_budget() -> int:
-    """Resolve the active window budget from state or env."""
-    budget = int(os.environ.get("AGRES_WINDOW_BUDGET", "0"))
-    if budget <= 0:
-        budget = int(get_state().get("window_budget", DEFAULT_WINDOW_BUDGET_TOKENS))
-    if budget < MIN_WINDOW_BUDGET_TOKENS:
-        budget = MIN_WINDOW_BUDGET_TOKENS
-    return budget
+    """Resolve the active window budget from state or env, auto-sync to model if unset.
+    Priority: env > state > detected model ctx > default 256k.
+    This fixes 'budget not updating' when running 1M model with default env.
+    """
+    # 1. Explicit env always wins
+    env_budget = os.environ.get("AGRES_WINDOW_BUDGET", "").strip()
+    if env_budget:
+        try:
+            budget = int(env_budget)
+            if budget >= MIN_WINDOW_BUDGET_TOKENS:
+                return budget
+            return MIN_WINDOW_BUDGET_TOKENS
+        except ValueError:
+            pass
+    # 2. Persisted state
+    state_budget = get_state().get("window_budget", 0)
+    try:
+        state_budget = int(state_budget) if state_budget else 0
+        if state_budget >= MIN_WINDOW_BUDGET_TOKENS:
+            return state_budget
+    except (ValueError, TypeError):
+        pass
+    # 3. Auto from detected model (1M -> 1M, 256k -> 256k)
+    try:
+        m = _detect_model()
+        ctx = int(m.get("limit",{}).get("context",0) or 0)
+        if ctx >= MIN_WINDOW_BUDGET_TOKENS and ctx != DEFAULT_WINDOW_BUDGET_TOKENS:
+            # Only auto if model ctx differs from default and is plausible
+            # Ponytail: one if, not a config file
+            return ctx
+    except Exception:
+        pass
+    # 4. Default
+    return DEFAULT_WINDOW_BUDGET_TOKENS
+
+def set_window_budget(tokens: int) -> None:
+    """Persist budget to state (for `agres budget --set`)."""
+    tokens = max(MIN_WINDOW_BUDGET_TOKENS, int(tokens))
+    state = get_state()
+    state["window_budget"] = tokens
+    state["window_budget_set_at"] = now_iso()
+    state["window_budget_source"] = "manual"
+    save_state(state)
 
 
 def add_window_item(
@@ -2254,7 +2283,16 @@ def _confidence_level(pct: float, folded: int, total_turns: int) -> str:
         base = "critical"
     return base
 
+_MODEL_CACHE: Optional[dict] = None
+
 def _detect_model() -> dict:
+    global _MODEL_CACHE
+    if _MODEL_CACHE is not None:
+        return _MODEL_CACHE
+    _MODEL_CACHE = _detect_model_uncached()
+    return _MODEL_CACHE
+
+def _detect_model_uncached() -> dict:
     """Best-effort model detection for status analytics.
     Checks (in order): env AGRES_MODEL, env OPENCODE_MODEL, opencode.db latest session,
     AGRES_WINDOW_BUDGET vs known windows. Never crashes.
@@ -2263,7 +2301,8 @@ def _detect_model() -> dict:
     for key in ("AGRES_MODEL", "OPENCODE_MODEL", "OPENCODE_ACTIVE_MODEL"):
         v = os.environ.get(key)
         if v:
-            return {"id": v, "providerID": "env", "variant": "", "source": f"env:{key}", "limit": {"context": window_budget(), "output": 8192}}
+            return {"id": v, "providerID": "env", "variant": "", "source": f"env:{key}",
+                    "limit": {"context": int(os.environ.get("AGRES_WINDOW_BUDGET") or DEFAULT_WINDOW_BUDGET_TOKENS), "output": 8192}}
     # 2. Try opencode.db latest session
     try:
         import sqlite3 as _s
@@ -2276,8 +2315,10 @@ def _detect_model() -> dict:
             if row and row["model"]:
                 import json as _j
                 m = _j.loads(row["model"])
-                # Enrich with limit from models.json cache if available
-                limit = {"context": window_budget(), "output": 8192}
+                # Enrich with limit from models.json cache if available.
+                # NOTE: do NOT call window_budget() here - it calls _detect_model()
+                # in its auto-sync path -> infinite mutual recursion (38s per CLI call).
+                limit = {"context": DEFAULT_WINDOW_BUDGET_TOKENS, "output": 8192}
                 try:
                     import json as _j2
                     mp = Path.home() / ".cache" / "opencode" / "models.json"
@@ -2304,10 +2345,9 @@ def _detect_model() -> dict:
                 }
     except Exception:
         pass
-    # 3. Fallback: infer from budget
-    budget = window_budget()
-    # heuristics: 262144 -> muse-spark/deepseek flash family
-    return {"id": f"unknown (budget {budget:,})", "providerID": "", "variant": "", "source": "budget_fallback", "limit": {"context": budget, "output": 8192}}
+    # 3. Fallback: plain default; never recurse back into window_budget
+    return {"id": "unknown", "providerID": "", "variant": "", "source": "fallback",
+            "limit": {"context": DEFAULT_WINDOW_BUDGET_TOKENS, "output": 8192}}
 
 def _model_badge(m: dict) -> str:
     ctx = m.get("limit",{}).get("context", 0)
@@ -2813,9 +2853,23 @@ def cmd_unfold(args: argparse.Namespace) -> None:
 
 def cmd_budget(args: argparse.Namespace) -> None:
     """Show the active window budget report."""
+    # --set: persist budget to state and exit
+    set_val = getattr(args, "set", None)
+    if set_val:
+        try:
+            set_window_budget(int(set_val))
+            state = get_state()
+            print(json.dumps({"budget_tokens": state["window_budget"], "source": "manual", "set_at": state.get("window_budget_set_at")}, indent=2))
+        except ValueError:
+            print(f"Invalid budget value: {set_val}", file=sys.stderr)
+            sys.exit(2)
+        return
+
     session_id = getattr(args, "session", None) or active_session_id()
     if not session_id:
-        print("No active session. Start with: agres start \"goal\"")
+        b = window_budget()
+        print(f"No active session. Window budget is {b:,} tokens (auto from model).")
+        print("Start with: agres start \"goal\"  |  Set budget: agres budget --set 1048576")
         return
     conn = get_conn()
     # If --json, dump json manifest instead of report
@@ -2980,8 +3034,11 @@ def cmd_gc(args: argparse.Namespace) -> None:
     print(json.dumps({"cas_removed": removed, "cas_kept": kept, "dry_run": dry}, indent=2))
 
 def cmd_repair(args: argparse.Namespace) -> None:
-    """Repair ghost sessions, WAL, and FTS health."""
-    _repair_active_session()
+    """Repair WAL, FTS health, integrity. Use --reset-session to clear active id."""
+    if getattr(args, "reset_session", False):
+        old_sid = active_session_id()
+        set_active_session_id(None)
+        print(f"cleared active session: {old_sid}")
     # Heal orphaned events: delete events referencing missing sessions? No — keep but warn
     conn = get_conn()
     # VACUUM + integrity
@@ -3104,6 +3161,7 @@ def main() -> None:
     p_budget = sub.add_parser("budget", help="Show context window budget usage (visual bars)")
     p_budget.add_argument("--session", help="Session ID")
     p_budget.add_argument("--json", action="store_true", help="Output JSON instead of visual report")
+    p_budget.add_argument("--set", metavar="TOKENS", help="Persist window budget (e.g. --set 1048576)")
 
     p_window = sub.add_parser("window", help="Show active window manifest (visual)")
     p_window.add_argument("--session", help="Session ID")
@@ -3116,7 +3174,8 @@ def main() -> None:
     p_gc = sub.add_parser("gc", help="Garbage collect unreferenced CAS objects and VACUUM")
     p_gc.add_argument("--dry-run", action="store_true", help="Show what would be deleted")
 
-    p_repair = sub.add_parser("repair", help="Repair ghost sessions, WAL, FTS and run integrity check")
+    p_repair = sub.add_parser("repair", help="Repair WAL, FTS, integrity; use --reset-session to clear active session")
+    p_repair.add_argument("--reset-session", action="store_true", help="Clear active_session_id (manual override)")
 
     args = parser.parse_args()
 
