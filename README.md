@@ -19,25 +19,27 @@ If you expected a distributed knowledge graph, you are in the wrong repo. Close 
 No global install needed. Use `npx`.
 
 ```bash
-npx agres --help
-npx agres status
+npx @ithica/agres --help
+npx @ithica/agres status
 ```
 
 If you insist on installing:
 
 ```bash
-npm i -g agres
+npm i -g @ithica/agres
 agres status
 ```
+
+Note: `agres` unscoped is blocked by npm (too similar to `dagre`), hence `@ithica/agres`. Binary is still `agres`, so after install `agres status` works. `npx` form is `npx @ithica/agres`.
 
 ### Install skill for your agent
 
 Puts `SKILL.md` where your agent will actually find it:
 
 ```bash
-npx agres skill-install
+npx @ithica/agres skill-install
 # or forced:
-npx agres skill-install --force
+npx @ithica/agres skill-install --force
 ```
 
 This copies to:
@@ -57,37 +59,37 @@ If you run a managed env where you cannot write to home, set `AGRES_HOME` and `A
 
 ```bash
 # 1. check that it sees your model and budget
-npx agres status
+npx @ithica/agres status
 # shows: model, budget bar, confidence, storage, counts, health
 
 # 2. start a session with a goal (so you do not end up with a zombie session)
-npx agres start "refactor auth, keep verbatim context for 1M conversation"
+npx @ithica/agres start "refactor auth, keep verbatim context for 1M conversation"
 
 # 3. capture every turn verbatim (your agent should do this automatically via the skill)
-npx agres capture --role user --text "we decided to keep the old auth flow, do not touch it"
-npx agres capture --role assistant --text "understood, auth flow pinned"
+npx @ithica/agres capture --role user --text "we decided to keep the old auth flow, do not touch it"
+npx @ithica/agres capture --role assistant --text "understood, auth flow pinned"
 
 # 4. pin what must never fade
-npx agres pin --text "auth flow is frozen, do not invent a new one"
+npx @ithica/agres pin --text "auth flow is frozen, do not invent a new one"
 
 # 5. watch the budget
-npx agres budget
-npx agres window
+npx @ithica/agres budget
+npx @ithica/agres window
 
 # 6. when it fills, fold
-npx agres fold --target 200000
+npx @ithica/agres fold --target 200000
 
 # 7. when you need old exact wording, unfold
-npx agres unfold --query "auth flow"
+npx @ithica/agres unfold --query "auth flow"
 # or by id
-npx agres unfold --fold-id fold_abc123
+npx @ithica/agres unfold --fold-id fold_abc123
 
 # 8. checkpoint before you pause, resume later
-npx agres checkpoint --reason "pausing mid-refactor"
-npx agres resume
+npx @ithica/agres checkpoint --reason "pausing mid-refactor"
+npx @ithica/agres resume
 
 # 9. when done
-npx agres end
+npx @ithica/agres end
 ```
 
 ## How it works without the marketing
@@ -110,7 +112,7 @@ If you add a 20000 char turn, it gets truncated to 12000 for the window (so one 
 
 ## Visual analytics you actually wanted in `agres status`
 
-`npx agres status` (or `--json` for CI) shows:
+`npx @ithica/agres status` (or `--json` for CI) shows:
 
 * model detection (via `AGRES_MODEL`, `OPENCODE_MODEL`, or `~/.local/share/opencode/opencode.db` latest session, plus limit from `~/.cache/opencode/models.json`)
 * window budget bar with `high/medium/low/critical` confidence
@@ -211,7 +213,7 @@ If you want the full list of 14 fixes and 29 edge case tests, read the commit hi
 git clone https://github.com/purple-claw/agres
 cd agres
 python3 -m py_compile runtime/agres_runtime.py
-npx agres status --json | jq .window_pct
+npx @ithica/agres status --json | jq .window_pct
 # run edge tests (if you have them locally):
 python3 /tmp/test_edgecases3.py
 python3 /tmp/test_deepseek_realtime.py
@@ -232,7 +234,7 @@ Github is just `git push`. No build step. No bundler. We keep it that way.
 
 ## FAQ you will ask anyway
 
-**Do I need to use the skill?** No. You can call `npx agres` directly from your agent. The skill just tells the agent to call it at the right time.
+**Do I need to use the skill?** No. You can call `npx @ithica/agres` directly from your agent. The skill just tells the agent to call it at the right time.
 
 **Will it slow my agent?** Tiered activation. For trivial tasks (<5 turns, <50k tokens) it is just one SQLite write per capture. For long sessions it does budget checks and auto-fold. If you think that is slow, measure it before opening an issue.
 
