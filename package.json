@@ -1,0 +1,57 @@
+{
+  "name": "agres",
+  "version": "0.4.0",
+  "description": "Agres Origami Memory - make your 256k context window behave like 1M. SQLite, fold/unfold, verbatim, no embeddings, no cloud.",
+  "keywords": [
+    "agent-skill",
+    "opencode",
+    "claude-code",
+    "ai-agent",
+    "memory",
+    "context-window",
+    "sqlite",
+    "deepseek",
+    "origami"
+  ],
+  "license": "MIT",
+  "author": {
+    "name": "Nitin (purple-claw)",
+    "email": "hawkr173@gmail.com",
+    "url": "https://github.com/purple-claw"
+  },
+  "homepage": "https://github.com/purple-claw/agres",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/purple-claw/agres.git"
+  },
+  "bugs": {
+    "url": "https://github.com/purple-claw/agres/issues"
+  },
+  "bin": {
+    "agres": "./bin/agres.js"
+  },
+  "main": "./bin/install.js",
+  "files": [
+    "bin/",
+    "skills/",
+    "runtime/",
+    "adapters/",
+    "snippets/",
+    "README.md",
+    "LICENSE",
+    "SKILL.md"
+  ],
+  "engines": {
+    "node": ">=18.0.0",
+    "python": ">=3.8"
+  },
+  "os": ["linux", "darwin", "win32"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "test": "node bin/test.js",
+    "postinstall": "node bin/postinstall.js"
+  },
+  "preferGlobal": false
+}

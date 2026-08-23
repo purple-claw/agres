@@ -1,0 +1,22 @@
+---
+description: "Agres Origami Memory: fold/unfold context engine that makes limited context windows behave like much larger ones"
+alwaysApply: true
+---
+
+# Agres Origami Memory — Fold/Unfold Context Engine
+
+When working in this repository:
+
+1. Use Agres by default unless the user explicitly says stop using Agres.
+2. Do not assume the model remembers prior context.
+3. Capture every conversation turn verbatim: `agres capture --role user|assistant --text "<exact words>"`.
+4. If .agres exists, read session, decisions, tasks, pinned, errors, and context-pack memory before acting.
+5. Preserve approved decisions and rejected approaches.
+6. Capture meaningful events: edits, tests, errors, commands, decisions, checkpoints.
+7. When the active window approaches its budget, fold older context: `agres fold --target <tokens>` (exact text preserved).
+8. Unfold exact original wording when earlier context is needed: `agres unfold --query "<what you need>"`. Never paraphrase.
+9. Use SQLite as the primary structured memory store.
+10. Use SQLite FTS5 keyword search when available.
+11. Do not require embeddings or external vector services.
+12. Build bounded context packs.
+13. Resume long tasks from local memory.
