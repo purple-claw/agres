@@ -34,7 +34,11 @@ Note: `agres` unscoped is blocked by npm (too similar to `dagre`), hence `@ithic
 
 ### Install skill for your agent
 
-Puts `SKILL.md` where your agent will actually find it:
+Makes every supported agent use Agres AUTOMATICALLY — no invocation needed.
+Auto-activation works two ways: skill routers match the `SKILL.md` description
+triggers ("USE AUTOMATICALLY WHEN: writing/editing/debugging code, repo tasks, ..."),
+and project rule files (`AGENTS.md`, `CLAUDE.md`, cursor rules, copilot instructions)
+are read by agents without being asked.
 
 ```bash
 npx @ithica/agres skill-install
@@ -45,11 +49,34 @@ npx @ithica/agres skill-install --force
 This copies to:
 
 * `~/.config/opencode/skills/agres/` (opencode)
+* `~/.opencode/skills/agres/` (opencode legacy data dir)
 * `~/.agents/skills/agres/` (generic agents)
-* `~/.claude/skills/agres/` (claude)
+* `~/.claude/skills/agres/` (claude code)
+* `~/.codex/skills/agres/` (codex cli)
+* `~/.gemini/skills/agres/` (gemini cli)
 * `./skills/agres/` (project-local, if `package.json` or `.git` exists)
+* global memory, read every session (appended once, never duplicated):
+  `~/.claude/CLAUDE.md`, `~/.config/opencode/AGENTS.md`, `~/.gemini/GEMINI.md`
+* project rules (same condition, skip with `--no-rules`): `AGENTS.md` + `CLAUDE.md`
+  marker block (appended once, never duplicated), `.github/copilot-instructions.md`
+  marker block, `.clinerules` (cline) marker block, `.cursor/rules/agres.mdc`
+  (`alwaysApply: true`)
 * runtime → `~/.agres/runtime/agres_runtime.py`
 * shim → `~/.local/bin/agres` (delegates to npx)
+
+commandcode and cline register skills from GitHub after push:
+
+```bash
+commandcode skills add purple-claw/agres
+cline skill add purple-claw/agres
+```
+
+Verify auto-activation wiring any time with:
+
+```bash
+npx @ithica/agres doctor          # human report
+npx @ithica/agres doctor --json   # CI-friendly
+```
 
 No hidden postinstall that clobbers your filesystem. The `postinstall` script literally does nothing except print a hint, because side effects in postinstall are how you get paged at 3am.
 
@@ -88,7 +115,13 @@ npx @ithica/agres unfold --fold-id fold_abc123
 npx @ithica/agres checkpoint --reason "pausing mid-refactor"
 npx @ithica/agres resume
 
-# 9. when done
+# 9. project brain: trace everything, graph it, inject it next session
+npx @ithica/agres trace                       # whole-project trace → .agres/trace.md
+npx @ithica/agres graph --build               # code+progress+git → one queryable graph
+npx @ithica/agres graph --query "auth flow"   # subgraph neighborhood for a question
+npx @ithica/agres brain --query "auth flow"   # one bounded pack carrying the whole project
+
+# 10. when done
 npx @ithica/agres end
 ```
 
@@ -99,6 +132,11 @@ turn (verbatim) -> window_items (budgeted, priority ordered) -> fold -> folds (e
 turns table keeps the full transcript forever (never truncated)
 window_items is what counts against your budget (priority 1 recent, 2 unfolded, 3+ pinned never auto-folded)
 folds is the disk backup with FTS5 so you can grep the exact phrasing later
+
+brain: index + sessions + git -> graph_nodes/graph_edges (one property graph)
+       trace = codebase + PageRank hubs + tasks/decisions/errors + git log + health
+       brain = trace + graph neighborhood + pins/decisions/turns, token-bounded with receipt
+read `brain` at session start: the model gets the whole project without re-exploring it
 ```
 
 Priority:
@@ -112,31 +150,32 @@ If you add a 20000 char turn, it gets truncated to 12000 for the window (so one 
 
 ## Visual analytics you actually wanted in `agres status`
 
-`npx @ithica/agres status` (or `--json` for CI) shows:
-
-* model detection (via `AGRES_MODEL`, `OPENCODE_MODEL`, or `~/.local/share/opencode/opencode.db` latest session, plus limit from `~/.cache/opencode/models.json`)
-* window budget bar with `high/medium/low/critical` confidence
-* `budget <-> model` line (throttled 1M → 256k when you test low-context)
-* storage: `DB + WAL + SHM + CAS + total` and object counts
-* counts for every table (sessions, events, turns, folds, window_items, etc.)
-* health warnings (ghost session, DB too large, FTS fallback)
-
-Example:
+`npx @ithica/agres status` (or `--json` for CI) shows a plain-language
+dashboard — labeled sections, gauges and sparklines, every issue paired
+with its fix. Non-technical readers get words ("Instant memory 12% used,
+223k free"); technical readers keep exact numbers and `--json`:
 
 ```
-┌─ Agres Origami Memory - Status
-│ session     sess_abc  ● active
-│ model     muse-spark-1.2-contributor-free via opencode ctx 1,048,576 (1M)
-│ budget↔model model ctx 1,048,576 → throttled to budget 262,144
-├─ Window Budget - 262,144 tokens
-│  ████████████████░░░░░░░░░░░░░░  53.7%  136,400 used
-│  confidence  ~ MEDIUM
-...
-├─ Storage  DB: 9.6MB  CAS: 85KB (611 objects)
-└─
+◆ Agres Memory  your project's brain and conversation memory
+● Session sess_f5f4555f0f08… · "refactor auth flow"
+Health  ✓ Excellent — everything is saved and within budget
+── Instant memory ──  what is remembered right now
+Used ████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 12% · 31k of 254k tokens · 223k free
+── Conversation ──  this session
+Messages 48 total · last 24h ▁▂▅▇
+Tucked away 12 · kept in total 60 · bring any back with unfold
+── Project brain ──  code and progress, always queryable
+Code 126 files · 1,204 symbols indexed
+Knowledge graph 138 nodes · 14 links (refreshed 2h ago)
+Progress 3 active tasks · 1 done task · 5 decisions · 2 pinned notes · 0 errors
+── Storage ──  on this machine
+Database 9.6MB + saved memories 87KB (619 items) · Fast search ✓ on
+── Needs attention ──
+✓ Nothing — all good.
+Next step: agres brain --query "…"   · --json for scripts
 ```
 
-`agres budget` and `agres window` also include model in header/footer now. If you do not like it, use `--json` and parse it yourself.
+`agres budget` and `agres window` keep the detailed gauge views. If you do not like words, use `--json` and parse it yourself.
 
 ## CLI reference
 
@@ -144,7 +183,7 @@ No surprise flags. All commands take `--help`.
 
 | command | what it does |
 |---|---|
-| `agres status` | visual analytics (budget bar, confidence, model, storage, health). Add `--json` |
+| `agres status` | 7-line visual dashboard (gauge, stacked bar, sparkline). Add `--json` |
 | `agres budget` | `agres status` but only the budget block, with auto-fold hints |
 | `agres window` | what is currently in the active window (priority, tokens) |
 | `agres start "goal"` | create session, returns `sess_xxx` |
@@ -157,14 +196,23 @@ No surprise flags. All commands take `--help`.
 | `agres decision --text "..." --accepted/--rejected` | durable decision log |
 | `agres task --objective "..."` | task tracker |
 | `agres error --message "..."` | error log |
-| `agres checkpoint --reason "..."` | snapshot |
-| `agres context --query "..."` | build context pack |
-| `agres search --query "..."` | FTS5 or LIKE fallback |
-| `agres index --path . --limit 1000` | index files/symbols/chunks per-project |
+| `agres checkpoint --reason "..."` | snapshot + validation (facts covered + audit artifact) |
+| `agres context --query "..." [--budget N] [--json]` | bounded pack (fits budget, receipt + stale tracking) |
+| `agres search --query "..."` | hybrid RRF (fts+symbols+import-graph, AND-first BM25) — `--mode legacy` for old shape |
+| `agres index --path . --limit 1000` | index files/symbols/chunks per-project (incremental via manifest) |
+| `agres map [--tokens 1024] [--query ...] [--focus a.py]` | ranked PageRank skeleton (hubs first, fits budget) |
+| `agres graph --build` | code-to-graph: files+symbols+progress+git → one SQLite property graph |
+| `agres graph --query "..." [--hops 2]` | BFS subgraph neighborhood for a question |
+| `agres graph --export json\|dot` | dump `.agres/graph.json` / `graph.dot` |
+| `agres trace [--json]` | whole-project trace → `.agres/trace.md` (codebase, hubs, progress, git, health) |
+| `agres brain [--query ...] [--budget N]` | context injection: one bounded pack carrying the whole project → `.agres/brain.md` |
+| `agres touch --files a.py,b.py` | re-index only listed files — call after EVERY edit |
+| `agres sync [--since HEAD~1]` | drift scan + prune deleted, git-scoped if --since |
 | `agres prune --keep-days 30 --dry-run` | bounded growth, VACUUM |
 | `agres gc --dry-run` | GC unreferenced CAS objects |
 | `agres repair` | fix ghost session, WAL, integrity |
-| `agres skill-install` | install skill files to agent paths |
+| `agres skill-install [--no-rules]` | install skill files to agent paths + project auto-read rules |
+| `agres doctor [--json]` | verify auto-activation wiring (skills + project rules) |
 | `agres end` | close session |
 
 Env:
@@ -180,6 +228,11 @@ Env:
 ## Python requirement
 
 Single file `runtime/agres_runtime.py`, Python 3.8+. No deps. If you do not have `python3` on PATH, set `AGRES_PYTHON`. We are not bundling a Python runtime because that would be the opposite of lazy.
+
+Optional precision upgrade (never required): `pip install tree_sitter tree_sitter_python`
+(+ `tree_sitter_javascript`, `tree_sitter_go`, ...) for class-scoped methods
+(`Store.save`), string-safe imports, and usage edges in the map graph.
+Without it, regex extraction is used. Check with `agres doctor` (`parser=` line).
 
 SQLite FTS5 if available, `LIKE ESCAPE` fallback if not. You do not need to care.
 
@@ -213,10 +266,9 @@ If you want the full list of 14 fixes and 29 edge case tests, read the commit hi
 git clone https://github.com/purple-claw/agres
 cd agres
 python3 -m py_compile runtime/agres_runtime.py
+npm run eval          # 13 deterministic gates, no LLM (exits non-zero on fail)
+# with tree-sitter backend: AGRES_PYTHON=/path/to/venv/python npm run eval
 npx @ithica/agres status --json | jq .window_pct
-# run edge tests (if you have them locally):
-python3 /tmp/test_edgecases3.py
-python3 /tmp/test_deepseek_realtime.py
 ```
 
 ## Publishing this package

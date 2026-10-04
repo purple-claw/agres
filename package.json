@@ -1,6 +1,6 @@
 {
   "name": "@ithica/agres",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Agres Origami Memory - make your 256k context window behave like 1M. SQLite, fold/unfold, verbatim, no embeddings, no cloud.",
   "keywords": [
     "agent-skill",
@@ -55,6 +55,8 @@
   },
   "scripts": {
     "test": "node bin/test.js",
+    "eval": "python3 bin/eval.py",
+    "eval:json": "python3 bin/eval.py --json",
     "postinstall": "node bin/postinstall.js"
   },
   "preferGlobal": false

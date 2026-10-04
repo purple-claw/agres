@@ -1,7 +1,7 @@
 ---
 name: agres
-description: "Agres Origami Memory: makes a limited context window (e.g. 256k tokens on DeepSeek V4 Flash) behave like a 1M+ window by capturing every turn verbatim, folding older context out of the active window, and unfolding exact original text on demand. Use by default in every coding conversation until the user explicitly says stop using Agres."
-default_enabled: false  # ponytail: tiered — enable only when context > 10 turns or >25% budget; short tasks skip overhead
+description: "Agres Origami Memory: makes a limited context window behave like a much larger one (verbatim capture, fold overflow out, unfold exact text on demand). USE AUTOMATICALLY without being asked WHEN: writing, editing, or debugging code; any repository task; multi-step or long-running work; needing earlier context, decisions, or file/symbol context. Stop only if the user says stop using Agres."
+default_enabled: true  # Tier 1 capture (1 sqlite write) is always on; full fold/unfold loop past 10 turns or 25% budget
 storage_backend: "sqlite"
 runtime_cli: "agres"
 stop_phrases:
@@ -89,7 +89,7 @@ Retention:
 
 - Bounded growth via `agres prune` + `agres gc` + per-file transactions + CAS GC
 - WAL + busy_timeout for concurrent CLI
-- Visual `agres status` shows storage + confidence in realtime
+- Visual `agres status` shows a plain-language dashboard (memory, conversation, brain, storage, fixes) in realtime
 
 Do not require:
 
@@ -110,7 +110,15 @@ agres init
 agres start "session goal"
 agres status
 agres index
+agres touch --files <edited-files>   # after EVERY file edit — keeps index fresh
+agres sync                           # drift scan + prune deleted (or --since HEAD~1)
+agres map --tokens 1024              # ranked skeleton: hubs first, fits budget
 agres repo-map
+agres graph --build                  # code-to-graph: files+symbols+tasks+decisions+git in one graph
+agres graph --query "..."            # subgraph neighborhood (BFS) for a question
+agres graph --export json|dot        # dump .agres/graph.json|dot
+agres trace                          # whole-project trace: codebase, structure, progress, work done
+agres brain [--query "..."]          # context injection: one bounded pack carrying the whole project
 agres context --query "search query"
 agres search --query "search query"
 agres decision --text "decision" --accepted
@@ -126,8 +134,8 @@ agres end
 
 agres capture --role user --text "verbatim user turn"
 agres capture --role assistant --text "verbatim assistant turn"
-agres status                 # visual analytics: budget bar, confidence, storage (DB/CAS), counts, health
-agres status --json          # JSON for CI
+agres status                 # plain-language dashboard: memory, conversation, brain, storage, fixes
+agres status --json          # JSON for CI (adds progress, graph, packs)
 agres budget                 # visual budget bar + confidence (auto-fold hints)
 agres window                 # visual manifest (priority breakdown)
 agres budget --json          # JSON
@@ -164,6 +172,19 @@ When context is needed, unfold only what is needed:
 Never reload an entire conversation into the window unless necessary.
 
 ## The agent's operating loop (follow this every session)
+
+### 0. Brain first — understand the whole project before acting
+
+On session start (or resume), inject project memory before reading files:
+
+agres brain [--query "<task>"]       # bounded pack: identity + structure + progress + graph + turns
+agres trace                          # full trace when you need depth (writes .agres/trace.md)
+agres graph --build                  # rebuild after index/sync, so the graph matches the code
+
+The brain pack is the model's working memory of the project. Rebuild the
+graph after structural changes (`index`/`sync`/`touch` on many files);
+re-read `brain` after checkpoints. Never re-derive architecture by
+re-reading the whole repo — the graph already holds it.
 
 ### 1. Capture — every turn, verbatim
 
@@ -233,8 +254,30 @@ agres resume
 The checkpoint restores the session goal, decisions, tasks, pins, errors,
 and the window manifest.
 
-## Fold types
+## Brain — project memory as a graph
 
+Agres is the model's memory and brain for the project, not just for the
+conversation. Three commands:
+
+- `agres graph --build` materializes one property graph in SQLite:
+  `file|symbol|task|decision|error|pin|checkpoint|session|commit` nodes;
+  `contains|imports|uses|touches|mentions|owns|about|covers|child_of` edges.
+  Code structure comes from the index (imports, tree-sitter refs, PageRank);
+  progress links are deterministic text→file mentions (no embeddings).
+- `agres trace` walks the whole project — file/language stats, PageRank
+  hubs, tasks by status, decisions accepted/rejected, recent errors, pins,
+  checkpoints, git log + churn, health (FTS, stale packs, graph freshness).
+- `agres brain [--query "..."]` fuses trace + graph neighborhood + pins /
+  decisions / tasks / recent turns into one token-bounded injection pack
+  (receipt + stale tracking like `context`). Read it at session start and
+  after resume; it is cheaper than re-exploring and never goes stale
+  silently (reindex marks packs stale).
+
+Retrieval priority addition: graph neighborhood (BFS around query seeds)
+ranks above raw chunk search for architecture questions; file reads still
+win for line-level depth.
+
+## Fold types
 Use these fold kinds (stored as `folds.kind`; 14 logical types map to 4 physical + metadata):
 
 1. ConversationFold — verbatim turn (kind=turn, priority 1)
@@ -354,7 +397,11 @@ Agres must not:
 - Assume the model remembers.
 - Paraphrase when unfolding — always restore exact original wording.
 - Let the window truncate silently — fold instead, so nothing is lost.
+- Re-explore the repo from scratch each session — read `brain` first.
+- Let the graph drift from the code — rebuild after index/sync.
 
 ## Final rule
 
 Agres exists so that the agent behaves as if it retains all relevant context until the user ends the session, without forcing the model to hold everything in raw tokens. **Every word of the conversation is preserved verbatim and is one unfold away — even when the model's context window is only 256k.**
+
+And Agres is the project's brain: **the whole repo — code, structure, progress, work done — lives as one queryable graph, and one bounded `brain` pack injects it into any session, so no progress or context is ever lost.**
