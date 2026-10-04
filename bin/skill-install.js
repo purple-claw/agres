@@ -142,7 +142,7 @@ function install() {
   const binDest = path.join(os.homedir(), '.local', 'bin', 'agres');
   try {
     fs.mkdirSync(path.dirname(binDest), { recursive: true });
-    const shim = `#!/usr/bin/env bash\nexec npx agres "$@"\n`;
+    const shim = `#!/usr/bin/env bash\nexec npx -y @ithica/agres "$@"\n`;
     if (!fs.existsSync(binDest) || process.argv.includes('--force')) {
       fs.writeFileSync(binDest, shim, { mode: 0o755 });
       console.log(`shim → ${binDest} (npx delegator)`);
