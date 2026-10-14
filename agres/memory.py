@@ -76,7 +76,11 @@ def _fts_put(store, table: str, rowid: int, body: str) -> None:
 def add_item(store, kind: str, text: str, *, status: Optional[str] = None, title: Optional[str] = None,
              why: Optional[str] = None, files: Optional[Iterable[str]] = None, priority: int = 0,
              session_id: Optional[str] = None, source: str = "agent", origin: Optional[str] = None,
-             replaces: Optional[int] = None, created_at: Optional[str] = None) -> int:
+             replaces: Optional[int] = None, created_at: Optional[str] = None,
+             updated_at: Optional[str] = None, closed_at: Optional[str] = None,
+             close_note: Optional[str] = None) -> int:
+    """Add an item. `created_at`/`updated_at`/`closed_at`/`close_note` exist for imports (migration)
+    that must keep an item's original history; normal writes leave them unset."""
     if kind not in KINDS:
         raise ValueError(f"unknown kind {kind!r} (one of: {', '.join(KINDS)})")
     _, default, allowed = KINDS[kind]
@@ -90,6 +94,8 @@ def add_item(store, kind: str, text: str, *, status: Optional[str] = None, title
     why = redact(why).strip() if why else None
     file_list = sorted({f.strip() for f in files or () if f and f.strip()})
     ts = created_at or now_iso()
+    upd = updated_at or ts
+    note = redact(close_note).strip() if close_note else None
     with store.tx():
         old = None
         if replaces is not None:
@@ -98,9 +104,10 @@ def add_item(store, kind: str, text: str, *, status: Optional[str] = None, title
                 raise ValueError(f"cannot replace {replaces}: no such item")
         cur = store.x(
             "INSERT INTO items(kind,status,title,text,why,files,priority,session_id,source,origin,"
-            "created_at,updated_at,closed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "close_note,created_at,updated_at,closed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (kind, status, title, text, why, json.dumps(file_list) if file_list else None, int(priority),
-             session_id, source, origin, ts, ts, None if status in LIVE[kind] else ts))
+             session_id, source, origin, note, ts, upd,
+             None if status in LIVE[kind] else (closed_at or upd)))
         iid = int(cur.lastrowid)
         _fts_put(store, "fts_items", iid, search_text(title, text, why, " ".join(file_list)))
         if old:
@@ -233,6 +240,19 @@ def touch_session(store, sid: str, agent: Optional[str] = None, cwd: Optional[st
         "title=COALESCE(excluded.title, sessions.title), prompts=sessions.prompts+?, "
         "ended_at=NULL, end_reason=NULL",
         (sid, agent, title, cwd, ts, ts, 1 if prompt else 0, 1 if prompt else 0))
+
+
+def add_session(store, sid: str, *, agent: Optional[str] = None, title: Optional[str] = None,
+                cwd: Optional[str] = None, started_at: Optional[str] = None, last_seen_at: Optional[str] = None,
+                ended_at: Optional[str] = None, end_reason: Optional[str] = None, prompts: int = 0) -> bool:
+    """Insert a session with explicit history (imports). Existing ids are left alone; True if inserted."""
+    ts = started_at or now_iso()
+    cur = store.x(
+        "INSERT OR IGNORE INTO sessions(id,agent,title,cwd,started_at,last_seen_at,ended_at,end_reason,prompts) "
+        "VALUES(?,?,?,?,?,?,?,?,?)",
+        (sid, agent, redact(title).strip() if title else None, cwd, ts, last_seen_at or ts, ended_at, end_reason,
+         int(prompts)))
+    return cur.rowcount > 0
 
 
 def end_session(store, sid: str, reason: Optional[str] = None) -> None:
