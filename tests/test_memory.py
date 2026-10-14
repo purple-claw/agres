@@ -111,6 +111,14 @@ class MemoryTest(TempHome):
         self.assertIsNotNone(memory.add_turn(self.s, "s2", "user", "hello there"))
         self.assertIsNone(memory.add_turn(self.s, "s1", "user", "   "))
 
+    def test_same_text_in_different_prompts_is_kept(self):
+        self.assertIsNotNone(memory.add_turn(self.s, "s1", "user", "yes", prompt_id="p1"))
+        self.assertIsNotNone(memory.add_turn(self.s, "s1", "user", "yes", prompt_id="p2"))
+        self.assertIsNone(memory.add_turn(self.s, "s1", "user", "yes", prompt_id="p2"))
+        self.assertIsNotNone(memory.add_turn(self.s, "s1", "assistant", "Done.", prompt_id="p1"))
+        self.assertIsNone(memory.add_turn(self.s, "s1", "assistant", "Done.", prompt_id="p1"))
+        self.assertIsNotNone(memory.add_turn(self.s, "s1", "assistant", "Done.", prompt_id="p2"))
+
     def test_turn_cap_and_private(self):
         big = "x" * (memory.MAX_TURN_CHARS + 500)
         tid = memory.add_turn(self.s, "s1", "assistant", big)
@@ -150,3 +158,29 @@ class MemoryNoFtsTest(MemoryTest):
         TempHome.setUp(self)
         self.root = self.git_repo("work", "p")
         self.s = db.Store(self.root, create=True, fts=False)
+
+
+class HandoffAndRelatedTest(TempHome):
+    def setUp(self):
+        TempHome.setUp(self)
+        self.s = db.Store(self.git_repo("work", "p"), create=True)
+
+    def tearDown(self):
+        self.s.close()
+        TempHome.tearDown(self)
+
+    def test_add_handoff_supersedes_previous(self):
+        a = memory.add_handoff(self.s, "first state", source="agent", session_id="s1")
+        b = memory.add_handoff(self.s, "second state", source="compact", session_id="s1")
+        self.assertEqual(memory.get_item(self.s, a)["superseded_by"], b)
+        live = self.s.q("SELECT id FROM items WHERE kind='handoff' AND status='active'")
+        self.assertEqual([r[0] for r in live], [b])
+
+    def test_similar_item_basis_for_long_prompts(self):
+        rej = memory.add_item(self.s, "decision", "Burn eFuses on a sacrificial board", status="rejected")
+        prompt = ("ok so for the secure boot bring-up today I think we should just burn the efuses on a "
+                  "sacrificial board to be quick, then flash the signed image, check uart logs, update "
+                  "the runbook, verify rollback paths, and document every register we touch")
+        self.assertEqual(memory.similar(self.s, prompt), [])
+        hits = memory.similar(self.s, prompt, basis="item", min_ratio=0.5)
+        self.assertEqual([h["id"] for h in hits], [rej])

@@ -109,6 +109,19 @@ def add_item(store, kind: str, text: str, *, status: Optional[str] = None, title
     return iid
 
 
+def add_handoff(store, text: str, source: str = "agent", session_id: Optional[str] = None,
+                created_at: Optional[str] = None) -> int:
+    """A handoff replaces whatever handoff was current: the pack shows only the newest."""
+    with store.tx():
+        prev = [r["id"] for r in store.q("SELECT id FROM items WHERE kind='handoff' AND status='active'")]
+        hid = add_item(store, "handoff", text, source=source, session_id=session_id, created_at=created_at)
+        ts = now_iso()
+        for p in prev:
+            store.x("UPDATE items SET status='superseded', superseded_by=?, updated_at=?, closed_at=? WHERE id=?",
+                    (hid, ts, ts, p))
+    return hid
+
+
 def get_item(store, iid: int) -> Optional[sqlite3.Row]:
     return store.one("SELECT * FROM items WHERE id=?", (iid,))
 
@@ -155,9 +168,11 @@ def fts_query(words: Iterable[str]) -> str:
 
 def similar(store, text: str, kind: Optional[str] = None, limit: int = 3,
             exclude_id: Optional[int] = None, kinds: Optional[Iterable[str]] = None,
-            min_overlap: int = 2, min_ratio: float = 0.34) -> list[sqlite3.Row]:
+            min_overlap: int = 2, min_ratio: float = 0.34, basis: str = "query") -> list[sqlite3.Row]:
     """Live items that say roughly the same thing: candidates from FTS, then kept only
-    if they share >= min_overlap significant terms covering >= min_ratio of the query."""
+    if they share >= min_overlap significant terms covering >= min_ratio of the query
+    (basis="query", for dedupe hints) or of the item itself (basis="item", so a long
+    prompt can still match a short rejected decision)."""
     q = terms(text)
     if len(q) < min_overlap:
         return []
@@ -178,8 +193,10 @@ def similar(store, text: str, kind: Optional[str] = None, limit: int = 3,
     for r in rows:
         if exclude_id is not None and r["id"] == exclude_id:
             continue
-        shared = len(q & terms(f"{r['title']} {r['text']} {r['why'] or ''}"))
-        if shared >= min_overlap and shared / len(q) >= min_ratio:
+        it = terms(f"{r['title']} {r['text']}" + (f" {r['why']}" if basis == "query" and r["why"] else ""))
+        shared = len(q & it)
+        denom = len(q) if basis == "query" else max(1, len(it))
+        if shared >= min_overlap and shared / denom >= min_ratio:
             scored.append((shared, r["updated_at"], r))
     scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
     return [r for _, _, r in scored[:limit]]

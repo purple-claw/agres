@@ -75,8 +75,8 @@ boundaries; per-item caps end in `…` + ID. Empty sections omitted. Order:
    (`agres decide|reject|pin|task|done|handoff`).
 
 **R4 Capture (hooks).** UserPromptSubmit stores `prompt`; Stop stores
-`last_assistant_message`. Dedupe `UNIQUE(session_id, role, sha1(text))` (Stop
-re-fires when other Stop hooks block). Strip `<private>…</private>`; redact common
+`last_assistant_message`. Dedupe on `(session_id, role, prompt_id, sha1(text))`: Stop
+re-fires when other Stop hooks block, but a user typing "yes" twice is two turns. Strip `<private>…</private>`; redact common
 secret shapes (PEM blocks, `AKIA…`, `ghp_…`, `sk-…`, `xox…-`). Skip harness-generated
 prompts (task notifications, agent messages, system reminders). Per-turn cap 64 KB
 (truncation marked). Stop hook writes **nothing** to stdout.
@@ -194,8 +194,8 @@ items(id INTEGER PRIMARY KEY,
       session_id TEXT, source TEXT NOT NULL, origin TEXT,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL, closed_at TEXT)
 turns(id INTEGER PRIMARY KEY, session_id TEXT, role TEXT CHECK(role IN ('user','assistant','system')),
-      text TEXT NOT NULL, hash TEXT NOT NULL, prompt_id TEXT, created_at TEXT NOT NULL,
-      UNIQUE(session_id, role, hash))
+      text TEXT NOT NULL, hash TEXT NOT NULL, prompt_id TEXT, created_at TEXT NOT NULL)
+UNIQUE INDEX turns_dedupe ON turns(session_id, role, COALESCE(prompt_id,''), hash)
 fts_items(title, text, why)   -- FTS5 external-content + triggers; LIKE fallback
 fts_turns(text)
 -- code tables from the 1.0 engine: nodes, edges, files, scans, changes, commits, commit_files, fts_nodes

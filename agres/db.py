@@ -54,10 +54,10 @@ CREATE TABLE IF NOT EXISTS turns(
   text TEXT NOT NULL,
   hash TEXT NOT NULL,
   prompt_id TEXT,
-  created_at TEXT NOT NULL,
-  UNIQUE(session_id, role, hash)
+  created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS turns_session ON turns(session_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS turns_dedupe ON turns(session_id, role, COALESCE(prompt_id, ''), hash);
 """
 
 FTS_TABLES = ("fts_items", "fts_turns", "fts_code")
