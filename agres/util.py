@@ -88,8 +88,15 @@ def est_tokens(text: str) -> int:
 
 
 def truncate(text: str, limit: int) -> str:
-    text = " ".join(text.split())
-    return text if len(text) <= limit else text[: max(0, limit - 1)].rstrip() + "…"
+    """One line, at most `limit` chars, cut at a word boundary when one is near."""
+    text = " ".join((text or "").split())
+    if len(text) <= limit:
+        return text
+    cut = text[: max(0, limit - 1)]
+    sp = cut.rfind(" ")
+    if sp >= limit * 0.6:
+        cut = cut[:sp]
+    return cut.rstrip(" ,;:-") + "…"
 
 
 def split_identifier(name: str) -> list[str]:
