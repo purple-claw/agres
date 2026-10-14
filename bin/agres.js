@@ -1,30 +1,25 @@
 #!/usr/bin/env node
-/**
- * agres npx shim - finds python and delegates to runtime/agres_runtime.py
- * Lazy dev's shim: if python not found, complain and die. No fallback magic.
- */
-const { spawn } = require('child_process');
-const path = require('path');
-const fs = require('fs');
+// npm/npx shim: run the bundled Python package (stdlib only) with python3.
+const { spawn } = require("child_process");
+const path = require("path");
 
-const runtime = path.join(__dirname, '..', 'runtime', 'agres_runtime.py');
+const root = path.join(__dirname, "..");
+const python = process.env.AGRES_PYTHON || "python3";
+const env = {
+  ...process.env,
+  PYTHONPATH:
+    root +
+    (process.env.PYTHONPATH ? path.delimiter + process.env.PYTHONPATH : ""),
+};
 
-// Find python
-function findPython() {
-  const candidates = ['python3', 'python'];
-  // Could add more logic, but ponytail says: try python3 then give up and tell user
-  return candidates[0];
-}
-
-const python = process.env.AGRES_PYTHON || findPython();
-const args = [runtime, ...process.argv.slice(2)];
-
-const child = spawn(python, args, { stdio: 'inherit' });
-
-child.on('error', (err) => {
-  console.error(`agres: failed to spawn ${python}: ${err.message}`);
-  console.error('hint: set AGRES_PYTHON to your python binary, or install python3');
+const child = spawn(python, ["-m", "agres", ...process.argv.slice(2)], {
+  stdio: "inherit",
+  env,
+});
+child.on("error", (err) => {
+  console.error(
+    `agres: could not start ${python}: ${err.message} (set AGRES_PYTHON to a Python >= 3.9)`,
+  );
   process.exit(1);
 });
-
-child.on('close', (code) => process.exit(code ?? 0));
+child.on("close", (code) => process.exit(code ?? 0));

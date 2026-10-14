@@ -1,17 +1,16 @@
 {
   "name": "@ithica/agres",
-  "version": "0.5.1",
-  "description": "Agres Origami Memory - make your 256k context window behave like 1M. SQLite, fold/unfold, verbatim, no embeddings, no cloud.",
+  "version": "1.0.0",
+  "description": "Agres: project memory for coding agents. Hooks capture and inject; the agent records decisions, rejections, constraints, tasks and handoffs. SQLite, local, stdlib Python.",
   "keywords": [
     "agent-skill",
-    "opencode",
     "claude-code",
-    "ai-agent",
+    "codex",
+    "coding-agent",
     "memory",
-    "context-window",
+    "project-memory",
     "sqlite",
-    "deepseek",
-    "origami"
+    "hooks"
   ],
   "license": "MIT",
   "author": {
@@ -30,20 +29,15 @@
   "bin": {
     "agres": "./bin/agres.js"
   },
-  "main": "./bin/install.js",
   "files": [
     "bin/",
-    "skills/",
-    "runtime/",
-    "adapters/",
-    "snippets/",
+    "agres/",
+    "skill/",
     "README.md",
-    "LICENSE",
-    "SKILL.md"
+    "LICENSE"
   ],
   "engines": {
-    "node": ">=18.0.0",
-    "python": ">=3.8"
+    "node": ">=18.0.0"
   },
   "os": [
     "linux",
@@ -54,9 +48,7 @@
     "access": "public"
   },
   "scripts": {
-    "test": "node bin/test.js",
-    "eval": "python3 bin/eval.py",
-    "eval:json": "python3 bin/eval.py --json",
+    "test": "python3 -m unittest discover -s tests",
     "postinstall": "node bin/postinstall.js"
   },
   "preferGlobal": false
