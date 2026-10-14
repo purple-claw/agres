@@ -379,8 +379,12 @@ def cli(a) -> int:
             return 0
         roots = ([r for r in find_v0_stores(a.target or home)] if a.all
                  else [a.target or here])
-        if a.all:  # nested stray stores are handled by their enclosing project
+        if a.all:  # nested strays go with their enclosing project; the global ~/.agres has its own path
+            skipped = [r for r in roots if paths.is_forbidden_root(r)]
+            roots = [r for r in roots if not paths.is_forbidden_root(r)]
             roots = [r for r in roots if not any(r != o and r.startswith(o + os.sep) for o in roots)]
+            if skipped:
+                print(f"(skipping {', '.join(skipped)}: the old global store — use `agres migrate --global`)")
         if not roots or roots == [None]:
             print("no agres project here")
             return 1
