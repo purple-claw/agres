@@ -99,12 +99,10 @@ class InstallTest(TempHome):
         self.assertEqual(install.build_plan().steps, [])  # idempotent
 
     def test_uninstall_restores(self):
-        with open(self.settings) as fh:
-            original = fh.read()
+        original = self.read_settings()
         install.apply(install.build_plan())
         install.uninstall()
-        with open(self.settings) as fh:
-            self.assertEqual(fh.read(), original)
+        self.assertEqual(self.read_settings(), original)
         with open(os.path.join(self.home, ".local", "bin", "agres")) as fh:
             self.assertIn("old_runtime.py", fh.read())
         with open(os.path.join(self.home, ".agent-skills", "agres", "SKILL.md")) as fh:
@@ -133,3 +131,58 @@ class InstallTest(TempHome):
     def test_skill_frontmatter_is_spec_valid(self):
         ok, msg = install._check_skill(os.path.join(install.SKILL_SRC, "SKILL.md"))
         self.assertTrue(ok, msg)
+
+
+class InstallSafetyTest(InstallTest):
+    def test_uninstall_keeps_changes_made_after_install(self):
+        install.apply(install.build_plan())
+        s = self.read_settings()
+        s["permissions"] = {"allow": ["Bash(npm test)"]}
+        s["hooks"].setdefault("Notification", []).append({"hooks": [{"type": "command", "command": "notify.sh"}]})
+        with open(self.settings, "w") as fh:
+            json.dump(s, fh)
+        md = os.path.join(self.home, ".claude", "CLAUDE.md")
+        with open(md, "a") as fh:
+            fh.write("\n# Added later\nnew rule\n")
+        install.uninstall()
+        after = self.read_settings()
+        self.assertEqual(after["permissions"], {"allow": ["Bash(npm test)"]})
+        cmds = self.commands(after)
+        self.assertIn("notify.sh", cmds)
+        self.assertFalse(any(" hook " in c and "agres" in c for c in cmds))
+        self.assertTrue(any("agres-touch.sh" in c for c in cmds))  # legacy wiring back
+        with open(md) as fh:
+            text = fh.read()
+        self.assertIn("# Added later\nnew rule", text)
+        self.assertIn("WATCHDOG", text)
+        self.assertNotIn("never run `agres capture`", text)
+
+    def test_settings_mode_and_symlink_preserved(self):
+        real = os.path.join(self.home, "dotfiles", "settings.json")
+        os.makedirs(os.path.dirname(real))
+        os.replace(self.settings, real)
+        os.symlink(real, self.settings)
+        os.chmod(real, 0o600)
+        install.apply(install.build_plan())
+        self.assertTrue(os.path.islink(self.settings))
+        self.assertEqual(os.stat(real).st_mode & 0o777, 0o600)
+        install.uninstall()
+        self.assertTrue(os.path.islink(self.settings))
+        self.assertEqual(os.stat(real).st_mode & 0o777, 0o600)
+
+    def test_invalid_settings_refused(self):
+        with open(self.settings, "w") as fh:
+            fh.write("{ not json")
+        with self.assertRaises(ValueError):
+            install.build_plan()
+
+    def test_half_done_install_can_be_undone(self):
+        plan = install.build_plan()
+        real_write = install._atomic_write
+        with mock.patch.object(install, "_atomic_write", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                install.apply(plan)
+        install._atomic_write = real_write
+        install.uninstall()
+        with open(os.path.join(self.home, ".local", "bin", "agres")) as fh:
+            self.assertIn("old_runtime.py", fh.read())

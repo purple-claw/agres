@@ -67,3 +67,33 @@ class GitRootTest(TempHome):
         self.assertEqual(paths.find_root(sub), sub)
         self.assertEqual(paths.git_root(sub), repo)
         self.assertIsNone(paths.git_root(self.mkdir("loose")))
+
+
+class WorktreeTest(TempHome):
+    def make_worktree(self):
+        main = self.git_repo("work", "agres")
+        wt_meta = os.path.join(main, ".git", "worktrees", "agres-v1")
+        os.makedirs(wt_meta)
+        with open(os.path.join(wt_meta, "commondir"), "w") as fh:
+            fh.write("../..\n")
+        wt = self.mkdir("work", "agres-v1")
+        with open(os.path.join(wt, ".git"), "w") as fh:
+            fh.write(f"gitdir: {wt_meta}\n")
+        return main, wt
+
+    def test_worktree_memory_lives_in_the_main_checkout(self):
+        main, wt = self.make_worktree()
+        sub = self.mkdir("work", "agres-v1", "agres")
+        self.assertEqual(paths.find_root(sub), main)
+        self.assertEqual(paths.git_root(sub), main)
+
+    def test_relative_gitdir_and_submodules(self):
+        main, wt = self.make_worktree()
+        with open(os.path.join(wt, ".git"), "w") as fh:
+            fh.write("gitdir: ../agres/.git/worktrees/agres-v1\n")
+        self.assertEqual(paths.find_root(wt), main)
+        sm = self.mkdir("work", "agres", "layers", "meta-x")  # submodule: gitdir without commondir
+        os.makedirs(os.path.join(main, ".git", "modules", "meta-x"))
+        with open(os.path.join(sm, ".git"), "w") as fh:
+            fh.write("gitdir: ../../.git/modules/meta-x\n")
+        self.assertEqual(paths.find_root(sm), sm)

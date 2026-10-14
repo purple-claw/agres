@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 from typing import Optional
@@ -90,13 +91,7 @@ def with_agres_hooks(settings: dict, agres_cmd: str) -> dict:
 
 def replace_claude_md_block(text: str) -> str:
     """Swap the `# Agres…` top-level section (to the next `# ` heading) for the 1.0 block."""
-    lines = text.splitlines(keepends=True)
-    start = next((i for i, l in enumerate(lines) if re.match(r"#\s+Agres\b", l)), None)
-    if start is None:
-        return text.rstrip("\n") + "\n\n" + CLAUDE_MD_BLOCK
-    end = next((i for i in range(start + 1, len(lines)) if re.match(r"#\s", lines[i])), len(lines))
-    tail = "".join(lines[end:])
-    return "".join(lines[:start]) + CLAUDE_MD_BLOCK + ("\n" + tail if tail else "")
+    return swap_section(text, CLAUDE_MD_BLOCK)
 
 
 # --------------------------------------------------------------------- plan
@@ -136,7 +131,7 @@ def build_plan() -> Plan:
         p.add("link", f"{link} -> {SKILL_SRC}", path=link, target=SKILL_SRC)
     settings = H(".claude", "settings.json")
     if os.path.isdir(H(".claude")):
-        cur = _read_json(settings)
+        cur = _read_json_strict(settings)
         new = with_agres_hooks(cur, shim)
         if new != cur:
             p.add("settings", f"{settings}: agres hooks for SessionStart, UserPromptSubmit, Stop, PostToolUse, "
@@ -166,6 +161,38 @@ def _read_json(path: str) -> dict:
         return {}
 
 
+def _read_json_strict(path: str) -> dict:
+    """Missing file -> {}; unparseable -> refuse, never overwrite a file we can't read."""
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding="utf-8") as fh:
+        raw = fh.read()
+    try:
+        data = json.loads(raw) if raw.strip() else {}
+    except ValueError as e:
+        raise ValueError(f"refusing to touch {path}: not valid JSON ({e})") from None
+    if not isinstance(data, dict):
+        raise ValueError(f"refusing to touch {path}: top level is not an object")
+    return data
+
+
+def _sha(text: str) -> str:
+    import hashlib
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _atomic_write(path: str, body: str) -> None:
+    """Write through symlinks, keep the original file mode (settings.json may hold tokens)."""
+    real = os.path.realpath(path)
+    mode = stat.S_IMODE(os.stat(real).st_mode) if os.path.exists(real) else 0o600
+    tmp = f"{real}.agres-tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(body)
+    os.chmod(tmp, mode)
+    os.replace(tmp, real)
+
+
 def _archive(path: str, archive: str, manifest: list) -> None:
     dest = os.path.join(archive, os.path.relpath(path, H()).replace(os.sep, "__"))
     os.makedirs(archive, exist_ok=True)
@@ -173,7 +200,14 @@ def _archive(path: str, archive: str, manifest: list) -> None:
     manifest.append({"op": "moved", "from": path, "to": dest})
 
 
+def _save_manifest(p: Plan, manifest: list) -> None:
+    os.makedirs(p.archive, exist_ok=True)
+    with open(os.path.join(p.archive, "manifest.json"), "w", encoding="utf-8") as fh:
+        json.dump({"version": __version__, "ts": p.ts, "actions": manifest}, fh, indent=2)
+
+
 def apply(p: Plan) -> list:
+    """Run the plan; the manifest is rewritten after every step so a half-done install can be undone."""
     manifest: list = []
     for kind, _, d in p.steps:
         path = d["path"]
@@ -184,33 +218,77 @@ def apply(p: Plan) -> list:
                     os.unlink(path)
                 else:
                     _archive(path, p.archive, manifest)
+                _save_manifest(p, manifest)
             os.makedirs(os.path.dirname(path), exist_ok=True)
             os.symlink(d["target"], path)
             manifest.append({"op": "linked", "path": path})
         elif kind in ("settings", "write"):
+            body = json.dumps(d["data"], indent=2) + "\n" if kind == "settings" else d["text"]
+            entry = {"op": "replaced", "kind": kind, "path": path, "backup": None, "sha": _sha(body)}
             if os.path.exists(path):
                 os.makedirs(p.archive, exist_ok=True)
-                backup = os.path.join(p.archive, os.path.basename(path))
-                shutil.copy2(path, backup)
-                manifest.append({"op": "replaced", "path": path, "backup": backup})
-            body = json.dumps(d["data"], indent=2) + "\n" if kind == "settings" else d["text"]
-            tmp = path + ".agres-tmp"
-            with open(tmp, "w", encoding="utf-8") as fh:
-                fh.write(body)
-            os.replace(tmp, path)
+                entry["backup"] = os.path.join(p.archive, os.path.basename(path))
+                shutil.copy2(os.path.realpath(path), entry["backup"])
+            manifest.append(entry)
+            _save_manifest(p, manifest)
+            _atomic_write(path, body)
         elif kind == "archive":
             _archive(path, p.archive, manifest)
-    if manifest:
-        os.makedirs(p.archive, exist_ok=True)
-        with open(os.path.join(p.archive, "manifest.json"), "w", encoding="utf-8") as fh:
-            json.dump({"version": __version__, "ts": p.ts, "actions": manifest}, fh, indent=2)
+        _save_manifest(p, manifest)
     return manifest
+
+
+def swap_section(text: str, block: str) -> str:
+    """Replace the `# Agres…` top-level section of `text` with `block` (appending if absent)."""
+    lines = text.splitlines(keepends=True)
+    start = next((i for i, l in enumerate(lines) if re.match(r"#\s+Agres\b", l)), None)
+    if start is None:
+        return text.rstrip("\n") + "\n\n" + block if block else text
+    end = next((i for i in range(start + 1, len(lines)) if re.match(r"#\s", lines[i])), len(lines))
+    tail = "".join(lines[end:])
+    return "".join(lines[:start]) + block + ("\n" + tail if tail and block else tail)
+
+
+def agres_section(text: str) -> str:
+    lines = text.splitlines(keepends=True)
+    start = next((i for i, l in enumerate(lines) if re.match(r"#\s+Agres\b", l)), None)
+    if start is None:
+        return ""
+    end = next((i for i in range(start + 1, len(lines)) if re.match(r"#\s", lines[i])), len(lines))
+    return "".join(lines[start:end]).rstrip("\n") + "\n"
+
+
+def _undo_replaced(a: dict, dry_run: bool) -> str:
+    """Never copy a stale backup over a live file: re-apply only agres's own change in reverse."""
+    path, backup = a["path"], a.get("backup")
+    if a.get("kind") == "settings" or path.endswith("settings.json"):
+        cur = _read_json_strict(path)
+        new = strip_agres_hooks(json.loads(json.dumps(cur)))
+        old = _read_json(backup) if backup else {}
+        for event, groups in (old.get("hooks") or {}).items():  # put back the legacy hooks install removed
+            legacy = [g for g in groups if any(_is_agres_hook(h) for h in g.get("hooks", []))]
+            if legacy:
+                new.setdefault("hooks", {}).setdefault(event, []).extend(legacy)
+        if not dry_run:
+            _atomic_write(path, json.dumps(new, indent=2) + "\n")
+        return f"{path}: agres 1.0 hooks removed, legacy hooks restored, everything else kept"
+    with open(path, encoding="utf-8") as fh:
+        cur = fh.read()
+    old = open(backup, encoding="utf-8").read() if backup and os.path.exists(backup) else ""
+    if _sha(cur) == a.get("sha"):
+        if not dry_run:
+            _atomic_write(path, old)
+        return f"{path}: restored (unchanged since install)"
+    if not dry_run:
+        _atomic_write(path, swap_section(cur, agres_section(old)))
+    return f"{path}: changed since install — only the Agres section reverted, your edits kept"
 
 
 def uninstall(dry_run: bool = False) -> list[str]:
     """Undo the most recent install manifest, newest action first; also strip any agres hooks left."""
     base = H(".agres-archive")
-    runs = sorted(d for d in os.listdir(base) if d.startswith("install-")) if os.path.isdir(base) else []
+    runs = sorted(d for d in os.listdir(base) if d.startswith("install-")
+                  and os.path.exists(os.path.join(base, d, "manifest.json"))) if os.path.isdir(base) else []
     done: list[str] = []
     if runs:
         with open(os.path.join(base, runs[-1], "manifest.json"), encoding="utf-8") as fh:
@@ -228,20 +306,16 @@ def uninstall(dry_run: bool = False) -> list[str]:
                 done.append(f"restore {a['from']}")
                 if not dry_run and not os.path.lexists(a["from"]):
                     shutil.move(a["to"], a["from"])
-            elif a["op"] == "replaced":
-                done.append(f"restore {a['path']} from backup")
-                if not dry_run:
-                    shutil.copy2(a["backup"], a["path"])
+            elif a["op"] == "replaced" and os.path.exists(a["path"]):
+                done.append(_undo_replaced(a, dry_run))
         if not dry_run:
             os.rename(os.path.join(base, runs[-1]), os.path.join(base, "undone-" + runs[-1]))
     settings = H(".claude", "settings.json")
     cur = _read_json(settings)
-    if cur and strip_agres_hooks(json.loads(json.dumps(cur))) != cur and not runs:
+    if not runs and cur and strip_agres_hooks(json.loads(json.dumps(cur))) != cur:
         done.append(f"remove agres hooks from {settings}")
         if not dry_run:
-            with open(settings, "w", encoding="utf-8") as fh:
-                json.dump(strip_agres_hooks(cur), fh, indent=2)
-                fh.write("\n")
+            _atomic_write(settings, json.dumps(strip_agres_hooks(cur), indent=2) + "\n")
     return done
 
 
@@ -315,7 +389,11 @@ def cli(a) -> int:
         steps = uninstall(dry_run=a.dry_run)
         print("\n".join(steps) if steps else "nothing to undo")
         return 0
-    plan = build_plan()
+    try:
+        plan = build_plan()
+    except ValueError as e:
+        print(f"agres install: {e}")
+        return 1
     if not plan.steps:
         print("already installed; `agres doctor` checks the wiring")
         return 0
