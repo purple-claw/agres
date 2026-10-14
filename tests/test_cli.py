@@ -92,6 +92,28 @@ class CliTest(TempHome):
         self.assertIn("1 pins", out)
         self.assertEqual(json.loads(self.agres("status", "--json").stdout)["items"]["pin"]["active"], 1)
 
+    # -------------------------------------------------------------- code
+    def test_index_map_touch_and_code_search(self):
+        self.write(self.root, "packages/callisto/knx.py",
+                   "class KnxTunnel:\n    def keepalive(self):\n        return 30\n")
+        self.write(self.root, "packages/callisto/service.py",
+                   "from .knx import KnxTunnel\n\ndef main():\n    KnxTunnel().keepalive()\n")
+        self.write(self.root, "packages/callisto/__init__.py", "")
+        out = self.agres("index").stdout
+        self.assertRegex(out, r"indexed \d+ files")
+        mp = self.agres("map", "--tokens", "300").stdout
+        self.assertIn("knx.py", mp)
+        hits = self.agres("search", "KnxTunnel").stdout
+        self.assertIn("code", hits)
+        self.write(self.root, "packages/callisto/extra.py", "def brand_new_function():\n    pass\n")
+        self.assertIn("touched 1", self.agres("touch", "packages/callisto/extra.py", cwd=self.root).stdout)
+        self.assertIn("brand_new_function", self.agres("search", "brand_new_function").stdout)
+        payload = {"session_id": "s1", "cwd": self.root, "tool_name": "Write",
+                   "tool_input": {"file_path": os.path.join(self.root, "packages/callisto/extra.py")}}
+        self.write(self.root, "packages/callisto/extra.py", "def renamed_by_hook():\n    pass\n")
+        self.assertEqual(self.agres("hook", "edit", stdin=json.dumps(payload)).stdout, "")
+        self.assertIn("renamed_by_hook", self.agres("search", "renamed_by_hook").stdout)
+
     # ------------------------------------------------------------- hooks
     def test_hook_entrypoint(self):
         payload = {"session_id": "s1", "cwd": self.sub, "prompt_id": "p1"}
