@@ -29,6 +29,23 @@ BINARY_EXT = {
 }
 
 
+# Files agres must never open: env files, keys/certs, credentials, `secrets/` trees.
+SECRET_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".keystore", ".jks")
+SECRET_PREFIXES = ("id_rsa", "id_ed25519")
+SECRET_DIRS = frozenset({"secrets", ".env"})  # a `.env` *directory* is a virtualenv or a dump of secrets
+
+
+def is_secret_path(rel: str) -> bool:
+    """True if `rel` (repo-relative, any separator) names a file the indexer must never read."""
+    parts = rel.replace("\\", "/").split("/")
+    base = parts[-1].lower()
+    if any(p.lower() in SECRET_DIRS for p in parts[:-1]):
+        return True
+    if base == ".env" or base.startswith(".env."):
+        return True
+    return base.endswith(SECRET_SUFFIXES) or base.startswith(SECRET_PREFIXES) or "credentials" in base
+
+
 def now_iso() -> str:
     return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
