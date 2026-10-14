@@ -40,7 +40,7 @@ successor.
 | Command | Does |
 |---|---|
 | `agres init [DIR] [--here]` | Create a store — at the git root by default, in the current directory with `--here`, never in `/` or `$HOME`. Hooks create one automatically in git checkouts (`auto_init`). |
-| `agres status [--deep] [--json]` | Counts by kind/status, conversation stats, code-index freshness, settings; `--deep` adds the hook log tail. |
+| `agres status [--deep] [--json]` | One screen: live memory counts, what the next session sees (pack size, items reachable / in full), **attention** items each with the command that fixes them (no critical pins, stale tasks, hook errors, silent capture, unwired hooks, leftover 0.x stores), 7-day activity, hook health, code index, store. `--deep` adds the hook log tail. |
 | `agres index [--full]` / `agres touch FILE…` | Sync the code graph / re-parse specific files (global edge resolution is deferred to the next query). |
 | `agres on` / `agres off` | Resume / pause capture and injection for this project (`.agres/off`). |
 | `agres config [KEY [VALUE]] [--project]` | Show or set settings (global by default). |
