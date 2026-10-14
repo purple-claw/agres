@@ -10,10 +10,12 @@
 from __future__ import annotations
 
 import time
+from typing import Iterable, Optional
 
-from . import gitwalk, rank
+from . import gitwalk, rank, repomap
 from .discover import sync_lock
 from .indexer import Indexer
+from .resolve import needs_resolve
 from .store import Store, dumps
 from ..util import now_iso
 
@@ -27,13 +29,26 @@ def counts(store: Store) -> dict:
     return {"files": files["c"], "loc": files["l"], "symbols": syms["c"], "edges": edges["c"]}
 
 
-def _needs_resolve(store: Store) -> bool:
-    return store.get_meta("resolved") != "1" or store.get_meta("resolve_dirty") == "1"
+def touch(store: Store, paths: Iterable[str]) -> int:
+    """Re-parse only `paths` (absolute or root-relative); the global resolve is deferred.
+
+    Files outside the root, ignored, secret, binary or unreadable are skipped (a missing file that was
+    indexed is marked deleted). Returns how many files were re-parsed or removed; when that is > 0
+    meta `resolve_dirty` becomes 1 so the next `ensure_resolved` rebuilds the edges.
+    """
+    return Indexer(store).touch(paths)
 
 
-def _mark_resolved(store: Store) -> None:
-    store.set_meta("resolved", "1")
-    store.set_meta("resolve_dirty", "0")
+def ensure_resolved(store: Store) -> bool:
+    """Run the deferred resolve + PageRank if the graph is stale. True if it ran."""
+    if not needs_resolve(store):
+        return False
+    with sync_lock(store) as ok:
+        if not ok or not needs_resolve(store):  # another process is resolving / already did
+            return False
+        Indexer(store).resolve()
+        rank.compute_ranks(store)
+    return True
 
 
 def sync(store: Store, full: bool = False, use_git: bool = True) -> dict:
@@ -47,9 +62,8 @@ def sync(store: Store, full: bool = False, use_git: bool = True) -> dict:
         changed = bool(st["added"] or st["modified"] or st["deleted"])
         res: dict = {}
         resolved = False
-        if changed or full or _needs_resolve(store):
+        if changed or full or needs_resolve(store):
             res = idx.resolve()
-            _mark_resolved(store)
             resolved = True
         g = gitwalk.ingest(store) if use_git else {}
         if resolved or g.get("commits"):
@@ -77,3 +91,23 @@ def sync(store: Store, full: bool = False, use_git: bool = True) -> dict:
                 store.set_meta("last_change", now_iso())
         return {**st, **res, "git": g, "counts": cnt, "seconds": round(time.time() - t0, 2), "scan_id": sid,
                 "changed": changed, "resolved": resolved}
+
+
+def search_code(store: Store, query: str, limit: int = 10) -> list[dict]:
+    """Best-first symbol/file hits: dicts with id, kind, name, path, line, sig, score.
+
+    Searches the parse-time FTS index, which edges do not influence, so a pending resolve is not run.
+    """
+    return repomap.search(store, query, limit)
+
+
+def repo_map(store: Store, query: Optional[str] = None, focus_files: Iterable[str] = (), tokens: int = 1024) -> str:
+    """Aider-style skeleton: files in (personalized) PageRank order with their top signatures.
+
+    `focus_files` (absolute or root-relative) and identifiers/terms in `query` seed the PageRank
+    teleport vector. The text is fitted to about tokens * 3.5 characters. Resolves pending edges first.
+    """
+    ensure_resolved(store)
+    idx = Indexer(store)
+    focus = [r for r in (idx.rel_path(p) for p in focus_files) if r]
+    return repomap.build_map(store, query, focus, tokens)
