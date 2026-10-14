@@ -1,13 +1,15 @@
-<!-- agres:auto -->
-# Agres (auto memory)
+# agres — developing this repo
 
-Use Agres Origami Memory AUTOMATICALLY, without being asked, when writing,
-editing, or debugging code, on any repository task, or when earlier context,
-decisions, or file/symbol context is needed. Stop only if the user says
-"stop using Agres".
+Project memory CLI for coding agents. Python ≥ 3.9, **stdlib only** (tree-sitter optional), one SQLite
+file per project. Spec/plan/ADR: `docs/plans/agres-v1-spec.md`, `docs/plans/agres-v1-plan.md`, `docs/adr/`.
 
-- Full contract: skills/agres/SKILL.md (or `npx @ithica/agres`).
-- Capture turns verbatim: `agres capture --role user|assistant --text "..."`.
-- After EVERY file edit: `agres touch --files <edited-files>`.
-- Window filling: `agres fold`; need history: `agres unfold --query "..."` (exact text).
-<!-- /agres:auto -->
+- Run: `python3 -m agres …` (or `bin/agres`). Tests: `python3 -m unittest discover -s tests` (no pytest).
+  Scoped: `python3 -m unittest tests.test_hooks -v`. Before a commit: `python3 -m compileall -q agres` + full suite.
+- Layout: `agres/` (paths, db, memory, pack, search, hooks, cli, config, status, install, migrate*, v0),
+  `agres/code/` (index engine: discover, indexer, resolve, rank, repomap, gitwalk, langs, engine),
+  `skill/agres/` (the shipped skill), `tests/` (unittest; `tests/helpers.py` fakes `$HOME`).
+- Invariants: hooks always exit 0 and print only on SessionStart/UserPromptSubmit; nothing is hard-deleted
+  (supersede/retire); `/` and `$HOME` are never project roots; the prompt/stop hook path must not import
+  `agres.code` (latency: SessionStart p95 < 300 ms, prompt < 100 ms).
+- Tests never touch the real `~/.agres`, `~/.claude` or project stores — use `TempHome`.
+- Conventional commits; one concern per commit.

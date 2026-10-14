@@ -1,0 +1,10 @@
+#!/bin/sh
+# agres shim: run the package from this checkout with whatever python3 is on PATH.
+# Resolves symlinks so ~/.local/bin/agres -> <repo>/bin/agres works.
+self="$0"
+while [ -L "$self" ]; do
+  target=$(readlink "$self")
+  case "$target" in /*) self="$target" ;; *) self="$(dirname "$self")/$target" ;; esac
+done
+repo="$(cd "$(dirname "$self")/.." && pwd)"
+PYTHONPATH="$repo${PYTHONPATH:+:$PYTHONPATH}" exec "${AGRES_PYTHON:-python3}" -m agres "$@"
