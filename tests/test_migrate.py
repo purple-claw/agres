@@ -49,8 +49,9 @@ def _build_global_template():
     okas = os.path.join(home, "work", "okas")
     apa = os.path.join(home, "work", "aparena")
     for root, rels in ((okas, ("packages/pulsar/pulsar.py", "packages/hades/server.js", "app/lib/hvac_widgets.dart",
-                               "README.md")),
-                       (apa, ("data/topics/number-system.json", "js/prose.js", "index.html"))):
+                               "README.md", "scripts/verify_options.sh", "docs/audit.md", "tools/fix_defects.py")),
+                       (apa, ("data/topics/number-system.json", "js/prose.js", "index.html", "reading/analogies.html",
+                              "reading/analogies-notes.md", "practice/analogies.js"))):
         os.makedirs(os.path.join(root, ".git"))
         for rel in rels:
             os.makedirs(os.path.dirname(os.path.join(root, rel)), exist_ok=True)
@@ -63,11 +64,13 @@ def _build_global_template():
     b.decision(home, s_ok, "HVAC airflow redone with soft plume beams in hvac_widgets.dart")
     b.task(home, s_ok, "Audit data/topics/number-system.json MCQs, then fix prose.js sentence spacing")
     b.pin(home, s_ok, "Added Exa remote MCP keyless and the web research skills to the global agent config")
+    b.pin(home, s_ok, "Verify options, audit logs and fix defects before the demo")  # plain words only
     b.pin(home, s_test, "special %_ test 12345")
     b.decision(home, s_test, "deepseek critical decision X")
     b.decision(home, s_sim, "Hades serves the console on port 80 for packages/hades")
     b.error(home, s_ok, "hades server.js crashes on startup when OKAS_ADMIN_PORT is unset")
     b.task(home, s_ok, "T1 audit complete for number-system topics in data/topics", status="done")
+    b.decision(home, s_ok, "Keep the analogies explanations short")  # weak evidence, but right after aparena items
     _TMP["glob"] = os.path.join(_TMP["dir"], "glob")
 
 
@@ -475,7 +478,7 @@ class GlobalTest(MigrateCase):
         return got[0]
 
     def test_every_pin_decision_task_error_gets_a_route(self):
-        self.assertEqual(len(self.routes), 9)
+        self.assertEqual(len(self.routes), 11)
         self.assertEqual({r["kind"] for r in self.routes}, {"pin", "decision", "task", "error"})
         for r in self.routes:
             for k in ("kind", "text", "created_at", "suggested_root", "score", "reason", "junk"):
@@ -494,6 +497,29 @@ class GlobalTest(MigrateCase):
         r = self.route("Exa remote MCP")
         self.assertIsNone(r["suggested_root"])
         self.assertFalse(r["junk"])
+
+    def test_plain_word_overlap_alone_is_not_confident(self):
+        r = self.route("Verify options, audit logs")
+        self.assertIsNone(r["suggested_root"])
+        self.assertGreater(r["scores"][self.okas], 0)  # words do occur in okas file names, but that proves nothing
+        self.assertFalse(r["accept"])
+
+    def test_unconfident_item_adopts_the_project_of_its_time_neighbours(self):
+        r = self.route("analogies explanations")
+        self.assertEqual(r["suggested_root"], self.apa)
+        self.assertIn("adjacent in time", r["reason"])
+        self.assertTrue(r["accept"])
+
+    def test_session_junk_applies_only_while_the_test_session_was_live(self):
+        conn = sqlite3.connect(os.path.join(self.gdir, "agres.db"))
+        conn.execute("UPDATE sessions SET created_at='2020-01-01T00:00:00+00:00' WHERE title LIKE '256k%'")
+        conn.commit()
+        conn.close()
+        later = migrate.global_routes(self.gdir, [self.okas, self.apa])
+        hades = [r for r in later if "Hades serves the console" in r["text"]][0]
+        self.assertFalse(hades["junk"])  # a stale pointer to a test session must not condemn real work
+        self.assertEqual(hades["suggested_root"], self.okas)
+        self.assertTrue([r for r in later if "special %_" in r["text"]][0]["junk"])  # text junk is unconditional
 
     def test_junk_flags(self):
         self.assertTrue(self.route("special %_ test 12345")["junk"])
@@ -527,7 +553,7 @@ class GlobalTest(MigrateCase):
         self.assertEqual({r["source"] for r in ok_items}, {"migrate:v0"})
         self.assertEqual(len(ok_items), 3)
         apa_items = self.items(self.apa)
-        self.assertEqual(len(apa_items), 2)
+        self.assertEqual(len(apa_items), 3)
         done = [r for r in apa_items if r["kind"] == "task" and r["status"] == "done"]
         self.assertEqual(len(done), 1)
         want = [r for r in self.routes if "HVAC" in r["text"]][0]["created_at"]
@@ -543,7 +569,7 @@ class GlobalTest(MigrateCase):
         mcp["accept"], mcp["target_root"] = True, self.apa
         res = migrate.apply_routes([mcp])
         self.assertEqual(res["imported"], 1)
-        self.assertEqual(len(self.items(self.apa)), 3)
+        self.assertEqual(len(self.items(self.apa)), 4)
 
     def test_apply_routes_refuses_unmigrated_targets(self):
         p = self.install("project")
