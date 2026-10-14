@@ -8,7 +8,6 @@ Changes"). Hotspots (churn x centrality) follow Tornhill's "Your Code as a Crime
 from __future__ import annotations
 
 import math
-import os
 import subprocess
 from collections import Counter
 from typing import Optional

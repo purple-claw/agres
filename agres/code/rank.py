@@ -11,8 +11,6 @@ from typing import Any, Iterable, Optional
 
 from .store import Store
 
-CODE_KINDS_EXCL = ("decision", "task", "error", "pin", "note", "journal", "goal")
-MEMORY_KINDS = CODE_KINDS_EXCL
 # weight multipliers used for ranking (direction: src -> dst means "src depends on dst")
 KIND_WEIGHT = {"imports": 1.0, "calls": 1.0, "inherits": 1.5, "references": 0.6, "depends": 0.3,
                "contains": 0.5, "co_change": 0.4}
@@ -22,13 +20,11 @@ IMPACT_KINDS = ("imports", "calls", "inherits", "references")
 class Graph:
     """In-memory snapshot of active nodes/edges for fast algorithms."""
 
-    def __init__(self, store: Store, edge_kinds: Optional[Iterable[str]] = None, include_memory: bool = False):
+    def __init__(self, store: Store, edge_kinds: Optional[Iterable[str]] = None):
         self.store = store
         self.nodes: dict[int, dict] = {}
         for r in store.q("SELECT id,key,kind,name,qualname,path,line,end_line,lang,sig,doc,rank,community,attrs "
                          "FROM nodes WHERE deleted_at IS NULL"):
-            if not include_memory and r["kind"] in MEMORY_KINDS:
-                continue
             self.nodes[r["id"]] = dict(r)
         self.out: dict[int, list[tuple[int, str, float]]] = {}
         self.inn: dict[int, list[tuple[int, str, float]]] = {}
@@ -123,9 +119,9 @@ def structural_edges(g: Graph, test_down: bool = True) -> list[tuple[int, int, f
 
 def compute_ranks(store: Store) -> dict[int, float]:
     g = Graph(store)
-    ids = [i for i, n in g.nodes.items() if n["kind"] != "dir" or True]
-    pr = pagerank(ids, structural_edges(g))
-    store.many("UPDATE nodes SET rank=? WHERE id=?", [(v, k) for k, v in pr.items()])
+    pr = pagerank(list(g.nodes), structural_edges(g))
+    with store.tx():
+        store.many("UPDATE nodes SET rank=? WHERE id=?", [(v, k) for k, v in pr.items()])
     return pr
 
 
@@ -227,8 +223,9 @@ def compute_communities(store: Store) -> dict[int, int]:
         adj[a][b] = adj[a].get(b, 0.0) + ww
         adj[b][a] = adj[b].get(a, 0.0) + ww
     part = louvain(adj) if any(adj.values()) else {f: i for i, f in enumerate(files)}
-    store.many("UPDATE nodes SET community=? WHERE id=?",
-               [(part.get(owner.get(i, i), -1), i) for i in g.nodes if owner.get(i, i) in part])
+    with store.tx():
+        store.many("UPDATE nodes SET community=? WHERE id=?",
+                   [(part.get(owner.get(i, i), -1), i) for i in g.nodes if owner.get(i, i) in part])
     return part
 
 
