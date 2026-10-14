@@ -160,6 +160,8 @@ function install() {
       fs.mkdirSync(dest, { recursive: true });
       const srcSkill = path.join(skillSrc, 'SKILL.md');
       if (fs.existsSync(srcSkill)) fs.copyFileSync(srcSkill, path.join(dest, 'SKILL.md'));
+      const srcRef = path.join(skillSrc, 'REFERENCE.md');
+      if (fs.existsSync(srcRef)) fs.copyFileSync(srcRef, path.join(dest, 'REFERENCE.md'));
       copyDir(adaptersSrc, path.join(dest, 'adapters'));
       copyDir(snippetsSrc, path.join(dest, 'snippets'));
       console.log(`skill → ${dest}`);
