@@ -144,3 +144,49 @@ def is_test_path(path: str) -> bool:
     return bool(
         re.match(r"(test_.*|.*_test\.\w+|.*\.test\.\w+|.*\.spec\.\w+|.*_spec\.\w+|.*tests?\.\w+)$", name)
     )
+
+
+# ------------------------------------------------------------------ privacy
+_PRIVATE = re.compile(r"<private>.*?(?:</private>|\Z)", re.S | re.I)
+_SECRETS = [
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)", re.S),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{30,}\b"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
+    re.compile(r"\bsk-(?:ant-|proj-)?[A-Za-z0-9_\-]{20,}"),
+    re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}"),
+    re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b"),
+]
+
+
+def redact(text: str) -> str:
+    """Strip <private>…</private> spans and well-known secret shapes before storing."""
+    if not text:
+        return text
+    text = _PRIVATE.sub("[private]", text)
+    for pat in _SECRETS:
+        text = pat.sub("[redacted]", text)
+    return text
+
+
+_STOP = frozenset("""
+a an and are as at be been but by can could did do does for from had has have how i if in into is it its
+just let me more my no not of on only or our out over so some than that the their them then there these
+they this to too up us use used using was we were what when where which while who why will with would you
+your also any all after before about should must need want get got make made new now via per yes""".split())
+
+
+def terms(text: str) -> set[str]:
+    """Significant lowercase terms: words of 3+ chars minus stopwords, plus numbers."""
+    out = set()
+    for w in re.findall(r"[A-Za-z0-9_]+", text or ""):
+        lw = w.lower()
+        if lw.isdigit():
+            if len(lw) >= 2:
+                out.add(lw)
+        elif len(lw) >= 3 and lw not in _STOP:
+            out.add(lw)
+            for sub in split_identifier(w):
+                if len(sub) >= 3 and sub not in _STOP:
+                    out.add(sub)
+    return out
