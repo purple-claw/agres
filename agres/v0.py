@@ -124,6 +124,17 @@ def _task_status(status: str, text: str) -> str:
     return "done" if st in _DONE_STATUS or _looks_done(text) else "open"
 
 
+_SNAPSHOT = re.compile(
+    r"^\s*(checkpoint\b|phase\s*\d+\s*(done|complete|completed)\b|.{0,40}\b(live\s+)?progress\b|"
+    r"status\b|.{0,30}\bstatus\s+\d{4}-\d\d-\d\d|verification at checkpoint|audit\s+\d{4}-\d\d-\d\d|"
+    r"(?-i:[A-Z0-9 _-]{3,40}\b(DONE|COMPLETE|COMPLETED|LIVE)\b[^:(]{0,20}[:(]))", re.I)
+
+
+def is_progress_snapshot(text: Optional[str]) -> bool:
+    """'CHECKPOINT 2026-10-13: …', 'Phase 5 COMPLETE: …', 'PULSAR STATUS …' — a dated log line, not a rule."""
+    return bool(text) and bool(_SNAPSHOT.match(text))
+
+
 def _generic_reason(reason: str) -> bool:
     key = re.sub(r"[\s_\-]+", "", (reason or "").lower())
     return key in {"", "sessionend", "sessionstop", "precompact", "postcompact", "compact", "autocompact",
@@ -156,8 +167,8 @@ def load(db_file: str, origin: Optional[str]) -> dict:
                                "updated": upd, "session_id": r.get("session_id") or None,
                                "order": order, "rowid": r["_rowid"]})
 
-    for r in raw["pins"]:
-        add("pin", "active", r.get("text"), r, 0)
+    for r in raw["pins"]:  # v0 habit: progress snapshots were pinned; they're history, not must-hold facts
+        add("note" if is_progress_snapshot(r.get("text")) else "pin", "active", r.get("text"), r, 0)
     for r in raw["decisions"]:
         text = r.get("decision") or r.get("text")
         if r.get("rejected"):

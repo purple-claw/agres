@@ -323,3 +323,78 @@ def rollback(root: str) -> dict:
     if manifest.get("root_state") == "v1":
         res["note"] = "v1 store left in place; nested items already merged into it stay (re-merging skips duplicates)"
     return res
+
+
+# ---------------------------------------------------------------------- cli
+def _summary(rep: dict) -> str:
+    t = rep.get("totals") or {}
+    parts = [f"{k}={v}" for k, v in sorted(t.items()) if v]
+    return ", ".join(parts) or "nothing to import"
+
+
+def _project_roots(start: str) -> list:
+    """Repo roots of every agres store (v0 or v1) under `start` — candidates for global routing."""
+    roots = set()
+    for d, dirs, _ in os.walk(start):
+        dirs[:] = [x for x in dirs if x not in DEFAULT_IGNORE_DIRS or x == paths.STORE_DIR]
+        if os.path.basename(d) == paths.STORE_DIR:
+            dirs[:] = []
+            root = paths.find_root(os.path.dirname(d))
+            if root:
+                roots.add(root)
+    return sorted(roots)
+
+
+def cli(a) -> int:
+    home = paths.home()
+    try:
+        if a.global_ or a.routes:
+            gdir = os.path.join(home, ".agres")
+            out = os.path.join(gdir, "routes.json")
+            if a.routes:
+                with open(a.routes, encoding="utf-8") as fh:
+                    routes = json.load(fh)
+                res = apply_routes(routes)
+                print(f"imported {res['imported']}, skipped {res['skipped']}, duplicates {res['duplicates']}")
+                for root, n in sorted(res["by_root"].items()):
+                    print(f"  {n:4}  {root}")
+                if not a.dry_run:
+                    archive_global(gdir)
+                    print(f"old global store archived under {gdir}/archive-v0/")
+                return 1 if res["errors"] else 0
+            routes = global_routes(gdir, _project_roots(a.target or home))
+            with open(out, "w", encoding="utf-8") as fh:
+                json.dump(routes, fh, indent=1)
+            for r in routes:
+                where = "JUNK" if r["junk"] else (r.get("suggested_root") or "?")
+                print(f"{'✓' if r.get('accept') else ' '} {r['kind']:8} {where[-40:]:40} {r['text'][:70]}")
+            print(f"\n{len(routes)} items; proposal written to {out}. Edit accept/target_root there, then "
+                  f"`agres migrate --routes {out}`.")
+            return 0
+        here = paths.git_root(os.getcwd()) or paths.find_root(os.getcwd())  # strays sit below the git root
+        if a.rollback:
+            root = a.target or here
+            res = rollback(root)
+            print(f"rolled back {res['root']}; v1 store moved to {res.get('moved_aside') or '(kept)'}")
+            return 0
+        roots = ([r for r in find_v0_stores(a.target or home)] if a.all
+                 else [a.target or here])
+        if a.all:  # nested stray stores are handled by their enclosing project
+            roots = [r for r in roots if not any(r != o and r.startswith(o + os.sep) for o in roots)]
+        if not roots or roots == [None]:
+            print("no agres project here")
+            return 1
+        for root in roots:
+            if a.dry_run:
+                rep = plan(root)
+                print(f"{root} [{rep['state']}]: {_summary(rep)}"
+                      + (f"; nested: {', '.join(rep['nested'])}" if rep["nested"] else ""))
+                for w in rep["warnings"]:
+                    print(f"  ! {w}")
+            else:
+                res = apply(root)
+                print(f"{root}: {res['status']} ({_summary(res)}) in {res['seconds']}s")
+        return 0
+    except MigrateError as e:
+        print(f"agres migrate: {e}")
+        return 1

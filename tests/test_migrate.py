@@ -596,3 +596,39 @@ class GlobalTest(MigrateCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CliTest(MigrateCase):
+    def run_cli(self, cwd, **kw):
+        import argparse
+        a = argparse.Namespace(target=None, all=False, dry_run=False, rollback=False, global_=False, routes=None)
+        vars(a).update(kw)
+        old = os.getcwd()
+        os.chdir(cwd)
+        try:
+            return migrate.cli(a)
+        finally:
+            os.chdir(old)
+
+    def test_run_from_a_stray_subdir_migrates_the_whole_project(self):
+        p = self.install()
+        self.assertEqual(self.run_cli(os.path.join(p, "packages", "pulsar")), 0)
+        self.assertEqual(agres_dirs(p), [".agres"])
+        origins = {r["origin"] for r in self.items(p)}
+        self.assertIn("packages/pulsar", origins)
+        self.assertEqual(self.run_cli(os.path.join(p, "app"), rollback=True), 0)
+        self.assertEqual(agres_dirs(p), [".agres"] + [f"{n}/.agres" for n in NESTED])
+
+
+class SnapshotPinTest(MigrateCase):
+    def test_progress_snapshots_are_notes_not_pins(self):
+        from agres.v0 import is_progress_snapshot as snap
+        for t in ("CHECKPOINT 2026-10-13 (feat/x): curtain screen", "Phase 5 COMPLETE: deploy/icarus.service",
+                  "Phase 6 LIVE PROGRESS: doc endpoint",
+                  "PULSAR STATUS 2026-09-24 eve: 65 tests green", "Verification at checkpoint 2026-10-14: analyze clean",
+                  "ARGUS LIVE: watchdog renamed", "PHASE 5 DONE + LIVE ON BOARD: health probes", "PULSAR PHASE DONE: packages/pulsar owns converter"):
+            self.assertTrue(snap(t), t)
+        for t in ("Secure boot dev constraint: NO sacrificial board.", "Load ID convention locked: padded 3-digit",
+                  "Board (ssh root@okas-homekit.local): services mosquitto", "Branding: app name 'Okas Homekit'",
+                  "Greek service theme locked: auth=kerberos", "Naming rule applied live: board renamed okas-homekit-d411"):
+            self.assertFalse(snap(t), t)

@@ -43,3 +43,13 @@ def find_root(start: Optional[str] = None) -> Optional[str]:
             return cur
         cur = os.path.dirname(cur)
     return None
+
+
+def git_root(start: Optional[str] = None) -> Optional[str]:
+    """Nearest ancestor with a `.git` entry (ignoring any .agres stores on the way)."""
+    cur = os.path.realpath(start or os.getcwd())
+    while not is_forbidden_root(cur):
+        if os.path.exists(os.path.join(cur, ".git")):
+            return cur
+        cur = os.path.dirname(cur)
+    return None

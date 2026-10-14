@@ -57,3 +57,13 @@ class FindRootTest(TempHome):
     def test_db_path(self):
         root = self.git_repo("work", "p")
         self.assertEqual(paths.db_path(root), os.path.join(root, ".agres", "agres.db"))
+
+
+class GitRootTest(TempHome):
+    def test_git_root_skips_nested_stores(self):
+        repo = self.git_repo("work", "okas")
+        sub = self.mkdir("work", "okas", "packages", "pulsar")
+        make_store_file(sub)
+        self.assertEqual(paths.find_root(sub), sub)
+        self.assertEqual(paths.git_root(sub), repo)
+        self.assertIsNone(paths.git_root(self.mkdir("loose")))
