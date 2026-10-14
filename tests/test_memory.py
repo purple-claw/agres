@@ -131,6 +131,41 @@ class MemoryTest(TempHome):
         self.assertEqual(row["end_reason"], "prompt_input_exit")
         self.assertIsNotNone(row["ended_at"])
 
+    # --------------------------------------------- imports keep their history
+    def test_add_item_explicit_timestamps_and_close_note(self):
+        iid = memory.add_item(self.s, "task", "Ship the thing", status="done",
+                              created_at="2024-01-02T03:04:05Z", updated_at="2024-02-03T04:05:06Z",
+                              close_note="imported")
+        it = memory.get_item(self.s, iid)
+        self.assertEqual((it["created_at"], it["updated_at"], it["closed_at"]),
+                         ("2024-01-02T03:04:05Z", "2024-02-03T04:05:06Z", "2024-02-03T04:05:06Z"))
+        self.assertEqual(it["close_note"], "imported")
+        iid = memory.add_item(self.s, "task", "Other", status="dropped",
+                              created_at="2024-01-02T03:04:05Z", closed_at="2024-03-04T00:00:00Z")
+        it = memory.get_item(self.s, iid)
+        self.assertEqual((it["updated_at"], it["closed_at"]), ("2024-01-02T03:04:05Z", "2024-03-04T00:00:00Z"))
+        live = memory.get_item(self.s, memory.add_item(self.s, "pin", "Live", created_at="2024-01-02T03:04:05Z"))
+        self.assertIsNone(live["closed_at"])
+
+    def test_add_item_defaults_unchanged_without_new_kwargs(self):
+        iid = memory.add_item(self.s, "task", "Plain")
+        it = memory.get_item(self.s, iid)
+        self.assertEqual(it["created_at"], it["updated_at"])
+        self.assertIsNone(it["closed_at"])
+        self.assertIsNone(it["close_note"])
+
+    def test_add_session_inserts_once_with_given_times(self):
+        self.assertTrue(memory.add_session(
+            self.s, "old1", agent="opencode", title="Fix the thing", cwd="/x", started_at="2024-01-01T00:00:00Z",
+            last_seen_at="2024-01-01T01:00:00Z", ended_at="2024-01-01T01:00:00Z", end_reason="migrated",
+            prompts=4))
+        row = self.s.one("SELECT * FROM sessions WHERE id='old1'")
+        self.assertEqual((row["agent"], row["title"], row["cwd"], row["prompts"]), ("opencode", "Fix the thing", "/x", 4))
+        self.assertEqual((row["started_at"], row["ended_at"], row["end_reason"]),
+                         ("2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", "migrated"))
+        self.assertFalse(memory.add_session(self.s, "old1", title="changed"))
+        self.assertEqual(self.s.one("SELECT title FROM sessions WHERE id='old1'")[0], "Fix the thing")
+
     def test_resolve_session_precedence(self):
         self.assertIsNone(memory.resolve_session(self.s))
         memory.touch_session(self.s, "recent")
