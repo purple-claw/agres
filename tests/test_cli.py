@@ -89,8 +89,8 @@ class CliTest(TempHome):
     def test_status(self):
         self.agres("pin", "a fact worth keeping")
         out = self.agres("status").stdout
-        self.assertIn("1 pins", out)
-        self.assertEqual(json.loads(self.agres("status", "--json").stdout)["items"]["pin"]["active"], 1)
+        self.assertIn("1 pin (0 critical)", out)
+        self.assertEqual(json.loads(self.agres("status", "--json").stdout)["memory"]["pins"], 1)
 
     # -------------------------------------------------------------- code
     def test_index_map_touch_and_code_search(self):
