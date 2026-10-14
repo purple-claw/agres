@@ -632,3 +632,21 @@ class SnapshotPinTest(MigrateCase):
                   "Board (ssh root@okas-homekit.local): services mosquitto", "Branding: app name 'Okas Homekit'",
                   "Greek service theme locked: auth=kerberos", "Naming rule applied live: board renamed okas-homekit-d411"):
             self.assertFalse(snap(t), t)
+
+
+class ReviewFixesMigrateTest(MigrateCase):
+    def test_off_flag_survives_migration(self):
+        p = self.install()
+        open(os.path.join(p, ".agres", "off"), "w").close()
+        migrate.apply(p)
+        self.assertTrue(os.path.exists(os.path.join(p, ".agres", "off")))
+
+    def test_all_merges_strays_when_the_root_has_no_v0_store(self):
+        import argparse
+        p = self.install()
+        shutil.move(os.path.join(p, ".agres"), os.path.join(self.tmp, "root-store-elsewhere"))
+        a = argparse.Namespace(target=os.path.join(self.home, "work"), all=True, dry_run=False, rollback=False,
+                               global_=False, routes=None)
+        self.assertEqual(migrate.cli(a), 0)
+        self.assertEqual(agres_dirs(p), [".agres"])
+        self.assertIn("packages/pulsar", {r["origin"] for r in self.items(p)})

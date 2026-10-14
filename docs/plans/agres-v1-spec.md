@@ -38,7 +38,8 @@ tasks, checkpoints, incremental manifest indexing, FTS5 search, PageRank map ide
 ## 3. Requirements (frozen)
 
 **R1 Project scoping.** Root = nearest ancestor containing `.agres/agres.db` →
-else `git rev-parse --show-toplevel` → else *no project*. `/` and `$HOME` are never
+else the nearest git checkout (for a linked worktree: its main checkout, so removing the worktree can't
+delete memory) → else *no project*. `/` and `$HOME` are never
 roots. Only `agres init [DIR]` creates a store outside a git repo (zeus uses this).
 No global project store, no global active-session pointer. Hooks with no project
 exit 0 silently.
@@ -64,7 +65,8 @@ Default 6,000 chars (~1.5k tokens), hard max 9,000 (Claude Code caps hook contex
 boundaries; per-item caps end in `…` + ID. Empty sections omitted. Order:
 
 1. Header: project name, branch@sha, dirty-file count.
-2. Latest handoff (≤700 chars; model-written preferred over auto/compact).
+2. Latest written handoff (≤700 chars). Automatic session-end handoffs never replace a written one; a newer
+   automatic one is appended as a one-line "Since then".
 3. Critical pins (all).
 4. Rejected decisions (newest 10) — "do not re-propose".
 5. Open tasks (newest 8) and open errors (newest 5).
@@ -90,7 +92,7 @@ edge resolution is deferred (dirty flag) to the next query command or `agres ind
 exit 0 on any failure, errors to `.agres/hook.log` (rotated at 256 KB), DB
 `busy_timeout` 2 s (sync hooks) / 10 s (async). `.agres/.gitignore` = `*`.
 
-**R7 On/off.** "stop using agres" / "disable agres" / "agres off" in a prompt →
+**R7 On/off.** A prompt that *starts* with "stop using agres" / "disable agres" / "agres off" (after ok/please) →
 `.agres/off` flag (per project) and a one-line confirmation; "agres on" / "enable
 agres" / "use agres" removes it. While off: no capture, no injection except one line
 saying it is off. `agres off|on` CLI does the same.
@@ -141,7 +143,7 @@ Not injected at SessionStart by default (`agres config brain.map on` to opt in).
 `~/.claude/skills/agres` link, Codex via `~/.codex/skills/agres` link); replace the
 three `agres-*.sh` hook entries in `~/.claude/settings.json` with `agres hook <event>`
 entries (settings backed up first; non-agres hooks untouched); replace
-`~/.claude/commands/agres.md` with a pointer to the skill. `agres doctor` verifies
+`~/.claude/commands/agres.md` by archiving it, so `/agres` loads the skill. `agres doctor` verifies
 all of it. `agres uninstall` reverses it.
 
 **R12 Migration.** `agres migrate [PATH|--all] [--dry-run]` converts v0 stores in
@@ -216,7 +218,8 @@ tests/             unittest; fixtures/hook-payloads/*.json, fixtures/v0-store bu
 bin/agres          shim · bin/agres.js (npm shim, kept working)
 ```
 
-`hooks.py` must not import `agres.code` on the prompt/stop paths (latency).
+`hooks.py` must not import the code engine on the prompt/stop paths (latency). `db.py` does import the
+stdlib-only `agres.code.graphops` mixin (~1 ms) — deliberate.
 
 ## 5. Non-goals
 

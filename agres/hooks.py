@@ -19,6 +19,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import os
+import re
 import sys
 import traceback
 from typing import Any, Optional, TextIO
@@ -34,7 +35,6 @@ EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 
 OFF_PHRASES = ("stop using agres", "disable agres", "agres off", "stop agres", "turn off agres", "turn agres off")
 ON_PHRASES = ("enable agres", "use agres", "agres on", "turn on agres", "turn agres on", "start using agres")
-TOGGLE_MAX = 120
 GUARD_MAX = 3
 GUARD_CHARS = 600
 LOG_MAX = 256 * 1024
@@ -110,6 +110,8 @@ def on_prompt(c: _Ctx) -> Optional[str]:
     new = True
     if c.cfg.get("capture") in ("all", "prompts"):
         new = memory.add_turn(s, c.sid, "user", text, prompt_id=c.p.get("prompt_id")) is not None
+    if c.sid and c.p.get("prompt_id"):
+        s.set_meta(f"prompt:{c.sid}", c.p["prompt_id"])  # Stop may not carry it
     if c.sid:
         memory.touch_session(s, c.sid, agent="claude-code", cwd=c.cwd, prompt=new)
     return _guard(s, c.sid, text) if c.cfg.get("guard") else None
@@ -120,8 +122,8 @@ def on_stop(c: _Ctx) -> None:
         return None
     s = c.store(create_ok=False)
     if s is not None:
-        memory.add_turn(s, c.sid, "assistant", c.p.get("last_assistant_message") or "",
-                        prompt_id=c.p.get("prompt_id"))
+        pid = c.p.get("prompt_id") or (s.get_meta(f"prompt:{c.sid}") if c.sid else None)
+        memory.add_turn(s, c.sid, "assistant", c.p.get("last_assistant_message") or "", prompt_id=pid)
     return None
 
 
@@ -135,12 +137,13 @@ def on_edit(c: _Ctx) -> None:
     _touch_files(s, files)
     if c.sid:
         key = f"files:{c.sid}"
-        seen = json.loads(s.get_meta(key) or "[]")
-        for f in files:
-            rel = os.path.relpath(f, c.root)
-            if not rel.startswith("..") and rel not in seen:
-                seen.append(rel)
-        s.set_meta(key, json.dumps(seen[-100:]))
+        with s.tx():  # parallel async edit hooks: serialize the read-modify-write
+            seen = json.loads(s.get_meta(key) or "[]")
+            for f in files:
+                rel = os.path.relpath(f, c.root)
+                if not rel.startswith("..") and rel not in seen:
+                    seen.append(rel)
+            s.set_meta(key, json.dumps(seen[-100:]))
     return None
 
 
@@ -155,7 +158,7 @@ def on_post_compact(c: _Ctx) -> None:
 
 
 def on_session_end(c: _Ctx) -> None:
-    if c.root is None or not c.sid:
+    if c.root is None or not c.sid or config.is_off(c.root):
         return None
     s = c.store(create_ok=False)
     if s is None:
@@ -164,7 +167,7 @@ def on_session_end(c: _Ctx) -> None:
     meta_keys = (f"files:{c.sid}", f"guard:{c.sid}")
     files = json.loads(s.get_meta(meta_keys[0]) or "[]")
     s.x("DELETE FROM meta WHERE key IN (?,?)", meta_keys)
-    if config.is_off(c.root) or s.one("SELECT 1 FROM items WHERE kind='handoff' AND session_id=?", (c.sid,)):
+    if s.one("SELECT 1 FROM items WHERE kind='handoff' AND session_id=?", (c.sid,)):
         return None
     prompts = s.q("SELECT text FROM turns WHERE session_id=? AND role='user' ORDER BY id", (c.sid,))
     if not prompts:
@@ -191,11 +194,19 @@ def _is_harness(text: str, cfg: dict) -> bool:
     return any(head.startswith(p) for p in cfg.get("skip_prefixes") or ())
 
 
+_FILLER = {"ok", "okay", "please", "pls", "now", "hey", "so", "and", "alright", "right", "yes", "yeah"}
+
+
 def _toggle(text: str) -> Optional[str]:
-    norm = " ".join(text.lower().split()).strip(" .!?\"'`")
+    """Only a prompt that *starts* with the phrase (after ok/please/…) toggles — never one that
+    merely mentions it ("how do I disable agres hooks?")."""
+    words = re.findall(r"[a-z0-9']+", text.lower())
+    while words and words[0] in _FILLER:
+        words.pop(0)
+    norm = " ".join(words)
     for verdict, phrases in (("off", OFF_PHRASES), ("on", ON_PHRASES)):
         for ph in phrases:
-            if norm.startswith(ph) or (ph in norm and len(norm) <= TOGGLE_MAX):
+            if norm == ph or norm.startswith(ph + " "):
                 return verdict
     return None
 
@@ -205,8 +216,11 @@ def _guard(s: db.Store, sid: str, text: str) -> Optional[str]:
     hits = [h for h in hits if (h["kind"] == "decision" and h["status"] == "rejected")
             or (h["kind"] == "pin" and h["priority"] > 0)]
     key = f"guard:{sid}"
-    seen = set(json.loads(s.get_meta(key) or "[]")) if sid else set()
-    hits = [h for h in hits if h["id"] not in seen][:GUARD_MAX]
+    with s.tx():
+        seen = set(json.loads(s.get_meta(key) or "[]")) if sid else set()
+        hits = [h for h in hits if h["id"] not in seen][:GUARD_MAX]
+        if hits and sid:
+            s.set_meta(key, json.dumps(sorted(seen | {h["id"] for h in hits})))
     if not hits:
         return None
     lines = ["Agres memory relevant to this request:"]
@@ -219,8 +233,6 @@ def _guard(s: db.Store, sid: str, text: str) -> Optional[str]:
         if sum(len(x) + 1 for x in lines) + len(line) > GUARD_CHARS:
             break
         lines.append(line)
-    if sid:
-        s.set_meta(key, json.dumps(sorted(seen | {h["id"] for h in hits})))
     return "\n".join(lines) if len(lines) > 1 else None
 
 

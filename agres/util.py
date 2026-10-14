@@ -41,7 +41,7 @@ def is_secret_path(rel: str) -> bool:
     base = parts[-1].lower()
     if any(p.lower() in SECRET_DIRS for p in parts[:-1]):
         return True
-    if base == ".env" or base.startswith(".env."):
+    if base.startswith(".env"):  # .env, .env.prod, .envrc, .env-local …
         return True
     return base.endswith(SECRET_SUFFIXES) or base.startswith(SECRET_PREFIXES) or "credentials" in base
 

@@ -133,10 +133,15 @@ def build(store, budget_chars: int = DEFAULT_CHARS, query: Optional[str] = None,
     shown: set[int] = set()
 
     # 1. last handoff
-    h = rows("SELECT * FROM items WHERE kind='handoff' AND status='active' ORDER BY created_at DESC, id DESC LIMIT 1")
+    hs = rows("SELECT * FROM items WHERE kind='handoff' AND status='active' ORDER BY created_at DESC, id DESC")
+    written = [r for r in hs if r["source"] != "auto"]
+    h = written[0] if written else (hs[0] if hs else None)
     if h:
-        h = h[0]
         text = h["text"] if len(h["text"]) <= HANDOFF_CHARS else truncate(h["text"], HANDOFF_CHARS)
+        newer = [r for r in hs if r["source"] == "auto" and (r["created_at"], r["id"]) > (h["created_at"], h["id"])]
+        if newer:
+            a = newer[0]
+            text += f"\nSince then ({fmt_id('handoff', a['id'])}, {ago(a['created_at'])}, auto): {truncate(a['text'], 300)}"
         shown.update(body.section(f"## Last handoff ({fmt_id('handoff', h['id'])}, {ago(h['created_at'])})",
                                   [(h["id"], text)]))
 

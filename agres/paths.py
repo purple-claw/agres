@@ -62,15 +62,12 @@ def find_root(start: Optional[str] = None) -> Optional[str]:
     env = os.environ.get("AGRES_ROOT")
     if env:
         return os.path.realpath(env)
-    cur = os.path.realpath(start or os.getcwd())
-    while not is_forbidden_root(cur):
+    first = cur = os.path.realpath(start or os.getcwd())
+    while not is_forbidden_root(cur):  # 1. nearest existing store (zeus topics, a project above a submodule)
         if os.path.isfile(db_path(cur)):
             return cur
-        owner = _git_owner(cur)
-        if owner:
-            return owner
         cur = os.path.dirname(cur)
-    return None
+    return git_root(first)  # 2. else the git checkout (main checkout for linked worktrees)
 
 
 def git_root(start: Optional[str] = None) -> Optional[str]:

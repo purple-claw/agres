@@ -152,7 +152,8 @@ def plan(root: str) -> dict:
 def _root_entries(sdir: str) -> list:
     if not os.path.isdir(sdir):
         return []
-    return [n for n in sorted(os.listdir(sdir)) if n != V0_DIR and not n.startswith(ROLLBACK_PREFIX)]
+    keep = {V0_DIR, "off", "hook.log"}  # v1 runtime files (off switch, hook log) stay where they are
+    return [n for n in sorted(os.listdir(sdir)) if n not in keep and not n.startswith(ROLLBACK_PREFIX)]
 
 
 def _move_in(root: str, state: str, nested: list, journal: list) -> dict:
@@ -381,7 +382,7 @@ def cli(a) -> int:
                  else [a.target or here])
         if a.all:  # nested strays go with their enclosing project; the global ~/.agres has its own path
             skipped = [r for r in roots if paths.is_forbidden_root(r)]
-            roots = [r for r in roots if not paths.is_forbidden_root(r)]
+            roots = sorted({paths.git_root(r) or r for r in roots if not paths.is_forbidden_root(r)})
             roots = [r for r in roots if not any(r != o and r.startswith(o + os.sep) for o in roots)]
             if skipped:
                 print(f"(skipping {', '.join(skipped)}: the old global store — use `agres migrate --global`)")

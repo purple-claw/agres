@@ -118,9 +118,12 @@ def add_item(store, kind: str, text: str, *, status: Optional[str] = None, title
 
 def add_handoff(store, text: str, source: str = "agent", session_id: Optional[str] = None,
                 created_at: Optional[str] = None) -> int:
-    """A handoff replaces whatever handoff was current: the pack shows only the newest."""
+    """A written (agent/compact/…) handoff replaces every current one; an automatic one (source
+    'auto', from a session that wrote none) only replaces earlier automatic ones, so a one-prompt
+    session can't bury a good handoff."""
+    only_auto = " AND source='auto'" if source == "auto" else ""
     with store.tx():
-        prev = [r["id"] for r in store.q("SELECT id FROM items WHERE kind='handoff' AND status='active'")]
+        prev = [r["id"] for r in store.q("SELECT id FROM items WHERE kind='handoff' AND status='active'" + only_auto)]
         hid = add_item(store, "handoff", text, source=source, session_id=session_id, created_at=created_at)
         ts = now_iso()
         for p in prev:

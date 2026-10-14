@@ -281,7 +281,7 @@ class TestSecretDenylist(IndexCase):
 
     def test_is_secret_path_helper(self):
         from agres.util import is_secret_path
-        for p in SECRET_FILES:
+        for p in SECRET_FILES + [".envrc", "deploy/.env-prod"]:
             self.assertTrue(is_secret_path(p), p)
         for p in ("src/env.py", "environment.md", "keyboard.py", "monkey.txt", "secret_santa.py", "README.md",
                   "docs/secrets.md", "main.py"):

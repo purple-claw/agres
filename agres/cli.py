@@ -284,7 +284,7 @@ def cmd_config(a):
 def cmd_status(a):
     from . import status
     with _open(a, create=False) as s:
-        print(status.render(s, deep=a.deep, as_json=a.json))
+        print(status.render(s, deep=a.deep or a.cmd == "trace", as_json=a.json))
 
 
 def cmd_gc(a):

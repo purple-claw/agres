@@ -97,3 +97,16 @@ class WorktreeTest(TempHome):
         with open(os.path.join(sm, ".git"), "w") as fh:
             fh.write("gitdir: ../../.git/modules/meta-x\n")
         self.assertEqual(paths.find_root(sm), sm)
+
+
+class NestedRepoTest(TempHome):
+    def test_submodule_inside_a_project_with_a_store_shares_it(self):
+        proj = self.git_repo("work", "yocto-build")
+        make_store_file(proj)
+        layer = self.git_repo("work", "yocto-build", "layers", "meta-okas")
+        self.assertEqual(paths.find_root(layer), proj)
+
+    def test_repo_without_any_store_above_is_its_own_root(self):
+        outer = self.git_repo("work", "outer")
+        inner = self.git_repo("work", "outer", "vendor", "lib")
+        self.assertEqual(paths.find_root(inner), inner)

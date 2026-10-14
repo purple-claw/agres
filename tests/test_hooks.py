@@ -240,3 +240,36 @@ class FailOpenTest(HookTest):
             self.assertEqual(self.run_hook("prompt", prompt="hello"), "")
         with open(os.path.join(paths.store_dir(self.root), "hook.log")) as fh:
             self.assertIn("disk on fire", fh.read())
+
+
+class ReviewFixesHookTest(HookTest):
+    def setUp(self):
+        super().setUp()
+        self.run_hook("session-start", source="startup")
+
+    def test_phrases_inside_questions_do_not_toggle(self):
+        for p in ("how do I disable agres hooks for one command?", "is the agres offline mode ok",
+                  "because agres crashed yesterday", "agres only stores prompts, right?",
+                  "can you use agres search to find the MQTT decision"):
+            self.run_hook("prompt", prompt=p)
+            self.assertFalse(config.is_off(self.root), p)
+        self.assertIn("off", self.context(self.run_hook("prompt", prompt="agres off please")).lower())
+        self.assertTrue(config.is_off(self.root))
+        self.assertIn("on", self.context(self.run_hook("prompt", prompt="ok, enable agres again")).lower())
+        self.assertFalse(config.is_off(self.root))
+
+    def test_identical_replies_in_different_turns_are_kept(self):
+        self.run_hook("prompt", prompt="first", prompt_id="p1")
+        self.run_hook("stop", last_assistant_message="Done.")
+        self.run_hook("stop", last_assistant_message="Done.")  # re-fire, same turn
+        self.run_hook("prompt", prompt="second", prompt_id="p2")
+        self.run_hook("stop", last_assistant_message="Done.")
+        self.assertEqual([t for t in self.turns("assistant")], [("assistant", "Done."), ("assistant", "Done.")])
+
+    def test_session_end_while_off_writes_nothing(self):
+        self.run_hook("prompt", prompt="some work here")
+        config.set_off(self.root, True)
+        self.run_hook("session-end", reason="other")
+        with self.store() as s:
+            self.assertIsNone(s.one("SELECT ended_at FROM sessions WHERE id='sess-1'")["ended_at"])
+            self.assertEqual(s.one("SELECT COUNT(*) FROM items")[0], 0)

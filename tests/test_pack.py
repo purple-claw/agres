@@ -111,3 +111,34 @@ class PackTest(TempHome):
         out = pack.build(self.s, query="mqtt topic map")
         rel = out[out.find("## Related"):]
         self.assertIn(f"N{ids['note']}", rel)
+
+
+class HandoffPrecedenceTest(TempHome):
+    def setUp(self):
+        super().setUp()
+        self.s = db.Store(self.git_repo("work", "p"), create=True)
+
+    def tearDown(self):
+        self.s.close()
+        super().tearDown()
+
+    def test_auto_handoff_does_not_replace_a_written_one(self):
+        rich = memory.add_handoff(self.s, "Done: stage 1. Next: stage 2 rollback test.", source="agent")
+        auto = memory.add_handoff(self.s, "Auto-handoff (session ended): 1 prompt. Last request: hi", source="auto")
+        self.assertEqual(memory.get_item(self.s, rich)["status"], "active")
+        out = pack.build(self.s, git=False)
+        block = out[out.find("## Last handoff"):]
+        self.assertIn(f"H{rich}", block.splitlines()[0])
+        self.assertIn("Next: stage 2 rollback test", block)
+        self.assertIn(f"Since then (H{auto}", block)
+        newer = memory.add_handoff(self.s, "Done: stage 2.", source="agent")
+        for old in (rich, auto):
+            self.assertEqual(memory.get_item(self.s, old)["status"], "superseded")
+        self.assertNotIn("Since then", pack.build(self.s, git=False))
+        self.assertIn(f"H{newer}", pack.build(self.s, git=False))
+
+    def test_auto_alone_is_shown(self):
+        a = memory.add_handoff(self.s, "Auto-handoff: last request x", source="auto")
+        b = memory.add_handoff(self.s, "Auto-handoff: last request y", source="auto")
+        self.assertEqual(memory.get_item(self.s, a)["status"], "superseded")
+        self.assertIn(f"## Last handoff (H{b}", pack.build(self.s, git=False))
