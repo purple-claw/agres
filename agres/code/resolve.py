@@ -24,9 +24,26 @@ NODE_BUILTINS = {"fs", "path", "os", "http", "https", "url", "util", "crypto", "
 SWIFT_STD = {"Foundation", "UIKit", "SwiftUI", "Combine", "Swift", "CoreData", "CoreGraphics", "XCTest", "AppKit"}
 
 
-# --------------------------------------------------------- phase 2: resolve
+def needs_resolve(s: Store) -> bool:
+    """True if edges are stale: never resolved, or files were touched since the last resolve."""
+    return s.get_meta("resolved") != "1" or s.get_meta("resolve_dirty") == "1"
+
+
 def resolve(s: Store) -> dict:
-    """Rebuild the desired edge set from stored facts and diff it against the active edges."""
+    """Rebuild the desired edge set from stored facts and diff it against the active edges.
+
+    One transaction: a concurrent `touch` either lands before this reads the facts (and is
+    resolved) or after it commits (and sets the dirty flag again), so no touch is ever lost.
+    """
+    with s.tx():
+        out = _resolve_all(s)
+        s.set_meta("resolved", "1")
+        s.set_meta("resolve_dirty", "0")
+    return out
+
+
+# --------------------------------------------------------- phase 2: resolve
+def _resolve_all(s: Store) -> dict:
     rows = s.q("SELECT path, node_id, lang, is_test, facts FROM files")
     facts: dict[str, Facts] = {}
     meta: dict[str, Any] = {}
@@ -54,7 +71,6 @@ def resolve(s: Store) -> dict:
         by_name.setdefault(r["name"], []).append((r["id"], r["path"], r["kind"], r["qualname"]))
     # path indexes
     suffix_idx: dict[str, list[str]] = {}
-    pymods: dict[str, list[str]] = {}
     dirs: set[str] = set()
     for p in paths:
         parts = p.split("/")
@@ -64,18 +80,25 @@ def resolve(s: Store) -> dict:
         sp = stem.split("/")
         for i in range(len(sp)):
             suffix_idx.setdefault("/".join(sp[i:]), []).append(p)
-        if p.endswith((".py", ".pyi")):
-            mp = sp[:-1] if sp[-1] == "__init__" else sp
-            for i in range(len(mp)):
-                pymods.setdefault(".".join(mp[i:]), []).append(p)
+    # python: package dirs and the sys.path-like roots absolute imports are tried against
+    pkg_dirs = {posixpath.dirname(p) for p in paths if posixpath.basename(p) == "__init__.py"}
+
+    def py_root_of(frm: str) -> str:
+        d = posixpath.dirname(frm)
+        while d and d in pkg_dirs:
+            d = posixpath.dirname(d)
+        return d
+
+    py_roots_global = list(dict.fromkeys(
+        ["", "src", "lib"] + sorted(py_root_of(p) for p in paths if posixpath.basename(p) == "__init__.py")))
     go_mod = ""
-    dart_pkg = ""
+    dart_pkgs: dict[str, str] = {}  # pubspec `name:` -> directory of that pubspec
     for p in paths:
-        fx = facts[p].extra
-        if p.endswith("go.mod") and fx.get("name") and (not go_mod or p == "go.mod"):
+        fx, base = facts[p].extra, posixpath.basename(p)
+        if base == "go.mod" and fx.get("name") and (not go_mod or p == "go.mod"):
             go_mod = fx["name"]
-        if p.endswith("pubspec.yaml") and fx.get("name") and (not dart_pkg or p == "pubspec.yaml"):
-            dart_pkg = fx["name"]
+        if base == "pubspec.yaml" and fx.get("name"):
+            dart_pkgs.setdefault(fx["name"], posixpath.dirname(p))
     dir_files: dict[str, list[str]] = {}
     for p in paths:
         dir_files.setdefault(posixpath.dirname(p), []).append(p)
@@ -146,26 +169,9 @@ def resolve(s: Store) -> dict:
         fdir = posixpath.dirname(frm)
         if L == "dep":
             return "pkg", raw
-        if L == "python":
-            if imp.level:
-                base = fdir
-                for _ in range(imp.level - 1):
-                    base = posixpath.dirname(base)
-                tgt = posixpath.join(base, raw.replace(".", "/")) if raw else base
-                for c in (tgt + ".py", tgt + "/__init__.py", tgt + ".pyi"):
-                    if c in pset:
-                        return "file", c
-                return "none", None
-            parts = raw.split(".")
-            for n in range(len(parts), 0, -1):
-                c = near(pymods.get(".".join(parts[:n]), []), frm)
-                if c:
-                    return "file", c
-            top = parts[0]
-            if top and top not in STDLIB:
-                return "pkg", top
-            return "none", None
         if L == "js":
+            if raw.startswith("node:") or raw in NODE_BUILTINS:
+                return "none", None
             if raw.startswith("."):
                 r = probe(posixpath.normpath(posixpath.join(fdir, raw)), JS_EXT)
                 return ("file", r) if r else ("none", None)
@@ -184,9 +190,7 @@ def resolve(s: Store) -> dict:
                     if r:
                         return "file", r
             name = raw.split("/")[0] if not raw.startswith("@") else "/".join(raw.split("/")[:2])
-            if name.startswith("node:") or name in NODE_BUILTINS:
-                return "none", None
-            return "pkg", name
+            return ("none", None) if name in NODE_BUILTINS else ("pkg", name)
         if L == "go":
             if go_mod and (raw == go_mod or raw.startswith(go_mod + "/")):
                 d = raw[len(go_mod):].lstrip("/")
@@ -227,7 +231,7 @@ def resolve(s: Store) -> dict:
             if raw.startswith(("java.", "javax.", "kotlin.", "scala.", "System", "Microsoft")):
                 return "none", None
             return "pkg", ".".join(raw.split(".")[:2])
-        if L == "c":
+        if L in ("c", "bb"):
             for c in (posixpath.normpath(posixpath.join(fdir, raw)), posixpath.normpath(raw)):
                 if c in pset:
                     return "file", c
@@ -250,8 +254,8 @@ def resolve(s: Store) -> dict:
                 return "none", None
             if raw.startswith("package:"):
                 pk, _, rest = raw[8:].partition("/")
-                if dart_pkg and pk == dart_pkg:
-                    c = "lib/" + rest
+                if pk in dart_pkgs:  # this app / a workspace package: <pubspec dir>/lib/<rest>
+                    c = posixpath.normpath(posixpath.join(dart_pkgs[pk], "lib", rest))
                     return ("file", c) if c in pset else ("none", None)
                 return "pkg", pk
             c = posixpath.normpath(posixpath.join(fdir, raw))
@@ -259,6 +263,83 @@ def resolve(s: Store) -> dict:
         if L == "swift":
             return ("none", None) if raw in SWIFT_STD else ("pkg", raw)
         return "none", None
+
+    # ---- python imports
+    def py_module(base: str, parts: list[str]) -> Optional[str]:
+        """File of the dotted module `parts` below directory `base` (module .py, package __init__, stub)."""
+        stem = posixpath.join(base, *parts) if parts else base
+        for c in (stem + ".py", stem + "/__init__.py", stem + ".pyi"):
+            if c in pset:
+                return c
+        return None
+
+    def py_absolute(frm: str, dotted: str, exact: bool = False) -> Optional[str]:
+        """Local file for an absolute import, tried against the sys.path-like roots of `frm`.
+
+        Never matches by suffix, so `import requests` cannot land on `utils/requests.py`; stdlib
+        names only resolve into a real local package (`test/__init__.py` + `import test.helpers`).
+        """
+        parts = [x for x in dotted.split(".") if x]
+        if not parts:
+            return None
+        roots = list(dict.fromkeys([py_root_of(frm)] + py_roots_global))
+        std = parts[0] in STDLIB
+        for n in ([len(parts)] if exact else range(len(parts), 0, -1)):
+            for r in roots:
+                c = py_module(r, parts[:n])
+                if c and (not std or (n >= 2 and posixpath.join(r, parts[0], "__init__.py") in pset)):
+                    return c
+        return None
+
+    def py_is_local_dir(frm: str, top: str) -> bool:
+        return any(posixpath.join(r, top) in dirs for r in [py_root_of(frm)] + py_roots_global)
+
+    def py_import(frm: str, fid: int, imp: langs.Imp, alias: dict, imps: set, w: float) -> None:
+        raw, level = imp.raw, imp.level
+        if not level and raw.startswith("."):  # regex-fallback parser keeps the dots in `raw`
+            level, raw = len(raw) - len(raw.lstrip(".")), raw.lstrip(".")
+        parts = [x for x in raw.split(".") if x]
+
+        def link(tgt: str) -> None:
+            put(fid, file_id[tgt], "imports", w)
+            imps.add(tgt)
+
+        def external() -> None:
+            if parts and parts[0] not in STDLIB and not py_is_local_dir(frm, parts[0]):
+                put(fid, pkg_node(parts[0]), "imports", w)
+
+        if not level and (not imp.names or any(o == "*mod" for o, _ in imp.names)):   # `import a.b.c [as x]`
+            tgt = py_absolute(frm, raw)
+            if tgt is None:
+                return external()
+            link(tgt)
+            for _o, al in imp.names:
+                alias[al] = (tgt, "*mod")
+            return
+        # `from [.]mod import names`
+        if level:
+            base = posixpath.dirname(frm)
+            for _ in range(level - 1):
+                base = posixpath.dirname(base)
+            init = posixpath.join(base, "__init__.py")
+            mod = py_module(base, parts) if parts else (init if init in pset else None)
+        else:
+            base, mod = "", py_absolute(frm, raw, exact=True)
+        need_mod = not imp.names
+        subs = 0
+        for orig, al in imp.names:
+            sub = py_module(base, parts + [orig]) if level else py_absolute(frm, f"{raw}.{orig}", exact=True)
+            if sub and orig != "*":
+                link(sub)
+                alias[al] = (sub, "*mod")
+                subs += 1
+            elif mod:
+                need_mod = True
+                alias[al] = (mod, orig)
+        if mod and need_mod:
+            link(mod)
+        elif not mod and not subs and not level:
+            external()
 
     # ---- per-file work
     file_alias: dict[str, dict[str, tuple[str, str]]] = {}   # path -> alias -> (target_path, orig|'*mod')
@@ -271,33 +352,15 @@ def resolve(s: Store) -> dict:
         alias: dict[str, tuple[str, str]] = {}
         imps: set[str] = set()
         for imp in fx.imports:
+            if imp.lang == "python":
+                py_import(p, fid, imp, alias, imps, w_file)
+                continue
             kind, tgt = resolve_import(p, imp)
             if kind == "file":
                 put(fid, file_id[tgt], "imports", w_file)
                 imps.add(tgt)
                 for orig, al in imp.names:
-                    if orig == "*mod":
-                        alias[al] = (tgt, "*mod")
-                    elif imp.lang == "python":
-                        sub = None
-                        if not imp.level:
-                            sub = near([c for c in pymods.get(f"{imp.raw}.{orig}", [])], p)
-                        else:
-                            base = posixpath.dirname(tgt) if tgt.endswith("__init__.py") else posixpath.dirname(tgt)
-                            for c in (f"{base}/{orig}.py", f"{base}/{orig}/__init__.py"):
-                                if c in pset:
-                                    sub = c
-                                    break
-                        if sub:
-                            put(fid, file_id[sub], "imports", w_file)
-                            imps.add(sub)
-                            alias[al] = (sub, "*mod")
-                        else:
-                            alias[al] = (tgt, orig)
-                    elif orig == "*ns":
-                        alias[al] = (tgt, "*mod")
-                    else:
-                        alias[al] = (tgt, orig)
+                    alias[al] = (tgt, "*mod" if orig in ("*mod", "*ns") else orig)
             elif kind == "dir":
                 for t in dir_files.get(tgt, [])[:40]:
                     if not t.endswith("_test.go"):

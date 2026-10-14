@@ -93,6 +93,8 @@ EXT_LANG = {
     ".sh": "shell", ".bash": "shell", ".zsh": "shell", ".md": "markdown", ".markdown": "markdown",
     ".json": "json", ".toml": "toml", ".yaml": "yaml", ".yml": "yaml", ".sql": "sql",
     ".html": "html", ".css": "css", ".scss": "css", ".xml": "xml", ".gradle": "gradle",
+    ".bb": "bitbake", ".bbappend": "bitbake", ".bbclass": "bitbake", ".inc": "bitbake", ".conf": "bitbake",
+    ".dts": "devicetree", ".dtsi": "devicetree",
 }
 MANIFESTS = {"package.json", "pyproject.toml", "go.mod", "Cargo.toml", "pubspec.yaml", "composer.json"}
 
@@ -258,7 +260,7 @@ CONTROL = {"if", "else", "elif", "for", "while", "switch", "catch", "return", "d
            "function", "def", "class", "throw", "await", "yield", "typeof", "sizeof", "delete", "case", "with"}
 
 CONTAINERS = {"class", "struct", "interface", "enum", "trait", "impl", "object", "module", "namespace",
-              "protocol", "extension", "mixin", "record"}
+              "protocol", "extension", "mixin", "record", "node"}
 HIDDEN_CONTAINERS = {"impl", "extension"}
 
 _NAME = r"(?P<name>[A-Za-z_$][\w$]*)"
@@ -273,6 +275,7 @@ class Spec:
     defs: list = field(default_factory=list)  # [(kind, regex)] top-level & container patterns
     methods: list = field(default_factory=list)  # [(kind, regex)] only inside containers
     imports: Optional[Callable[[str], list]] = None
+    caps: dict = field(default_factory=dict)  # kind -> max symbols of that kind per file
 
 
 def _re(p: str) -> re.Pattern:
@@ -382,6 +385,15 @@ def _imports_md(src: str) -> list:
     return out
 
 
+def _imports_bb(src: str) -> list:
+    out = [Imp(m.group("m"), [], 0, _line_of(src, m.start()), "bb")
+           for m in re.finditer(r"(?m)^\s*(?:require|include)\s+(?P<m>[^\s#]+)", src)]
+    for m in re.finditer(r"(?m)^\s*inherit(?:_defer)?\s+(?P<m>[^#\n]+)", src):
+        out += [Imp(f"classes/{c}.bbclass", [], 0, _line_of(src, m.start()), "bb")
+                for c in m.group("m").replace("\\", " ").split() if "${" not in c]
+    return out
+
+
 SPECS: dict[str, Spec] = {}
 
 _JS_DEFS = [
@@ -479,6 +491,17 @@ SPECS["shell"] = Spec(line_comments=("#",), block_comment=None, defs=[
     ("function", _re(r"^\s*(?:function\s+)?(?P<name>[A-Za-z_][\w-]*)\s*\(\s*\)\s*\{?")),
     ("function", _re(r"^\s*function\s+(?P<name>[A-Za-z_][\w-]*)")),
 ], imports=_simple(r"^\s*(?:source|\.)\s+(?P<m>[\w./$\"'{}-]+)", "path"))
+_BB_FUNC = _re(r"^\s*(?:(?:fakeroot|python)\s+)*(?P<name>[A-Za-z_][\w:.+\-${}]*)\s*\(\s*\)\s*\{?")
+_BB_VAR = _re(r"^(?:export\s+)?(?P<name>[A-Z][A-Z0-9_]*)(?:\[[\w\-.]+\])?(?::[\w\-.${}:+]+)*\s*"
+              r"(?:\?\?=|\?=|:=|\+=|=\+|\.=|=\.|=)")
+SPECS["bitbake"] = Spec(line_comments=("#",), block_comment=None, defs=[("function", _BB_FUNC), ("variable", _BB_VAR)],
+                        caps={"variable": 60}, imports=_imports_bb)
+_DT_NAME = r"[\w,.+@\-]+"
+SPECS["devicetree"] = Spec(defs=[
+    ("node", _re(r"^\s*(?P<name>[A-Za-z_]\w*)\s*:\s*[\w,.+@/\-]+\s*\{")),   # label: node@addr {
+    ("node", _re(r"^\s*&(?P<name>[A-Za-z_]\w*)\s*\{")),                       # &label {
+    ("node", _re(r"^\s*(?P<name>" + _DT_NAME + r"|/)\s*\{")),                  # node@addr {   and   / {
+], imports=_simple(r'^\s*(?:#\s*include|/include/)\s+"(?P<m>[^"]+)"', "c"))
 SPECS["markdown"] = Spec(scope="none", line_comments=(), block_comment=None, imports=_imports_md)
 SPECS["sql"] = Spec(scope="none", line_comments=("--",), block_comment=("/*", "*/"), defs=[
     ("table", _re(r"(?i)^\s*create\s+(?:or\s+replace\s+)?(?:table|view)\s+(?:if\s+not\s+exists\s+)?(?P<name>[\w.\"`]+)")),
@@ -577,15 +600,11 @@ def parse_generic(src: str, lang: str) -> Facts:
     pending: Optional[Sym] = None
     syms: list[Sym] = []
     qual_seen: dict[str, int] = {}
+    kind_n: dict[str, int] = {}
     cur_calls: dict[str, list[str]] = {}
     refs: dict[str, None] = {}
     defined_here: set[str] = set()
     has_main = False
-
-    def top_container() -> Optional[Sym]:
-        for s, _d, _i in reversed(stack):
-            return s
-        return None
 
     for i, line in enumerate(code):
         stripped = line.strip()
@@ -618,6 +637,8 @@ def parse_generic(src: str, lang: str) -> Facts:
                 name = m.group("name")
                 if name in CONTROL and kind in ("function", "method"):
                     continue
+                if kind in spec.caps and kind_n.get(kind, 0) >= spec.caps[kind]:
+                    continue
                 if lang in ("javascript", "typescript") and kind == "method" and parent is None:
                     continue
                 if kind == "function" and parent is not None and parent.kind in CONTAINERS:
@@ -640,6 +661,7 @@ def parse_generic(src: str, lang: str) -> Facts:
                     hidden = True
                 matched = Sym(name=name, qualname=q, kind=kind, line=i + 1, sig=sig,
                               doc=_doc_before(lines, i), parent=pq)
+                kind_n[kind] = kind_n.get(kind, 0) + 1
                 if gd.get("base") and kind in CONTAINERS | {"class", "interface"}:
                     f.bases.setdefault(q, []).append(gd["base"])
                 break
@@ -888,4 +910,16 @@ SPECS["python"] = Spec(scope="indent", line_comments=("#",), block_comment=None,
     Imp(m.group(1) or m.group(2), [], 0, _line_of(src, m.start()), "python")
     for m in re.finditer(r"(?m)^\s*(?:from\s+([\w.]+)\s+import|import\s+([\w.]+))", src)])
 
-STDLIB = set(getattr(sys, "stdlib_module_names", ())) | {"__future__"}
+_STDLIB_39 = """abc argparse array ast asyncio atexit base64 bisect builtins bz2 calendar cgi cmath cmd codecs collections
+colorsys concurrent configparser contextlib contextvars copy copyreg csv ctypes curses dataclasses datetime dbm decimal
+difflib dis doctest email encodings enum errno faulthandler fcntl filecmp fileinput fnmatch fractions ftplib functools gc
+getopt getpass gettext glob graphlib grp gzip hashlib heapq hmac html http imaplib imghdr imp importlib inspect io
+ipaddress itertools json keyword lib2to3 linecache locale logging lzma mailbox marshal math mimetypes mmap
+multiprocessing netrc numbers operator optparse os pathlib pdb pickle pipes pkgutil platform plistlib poplib posix
+pprint profile pstats pty pwd py_compile pydoc queue quopri random re readline reprlib resource runpy sched secrets
+select selectors shelve shlex shutil signal site smtplib socket socketserver sqlite3 ssl stat statistics string
+stringprep struct subprocess sys sysconfig syslog tarfile telnetlib tempfile termios textwrap threading time
+timeit tkinter token tokenize tomllib trace traceback tracemalloc tty turtle types typing unicodedata unittest urllib
+uu uuid venv warnings wave weakref webbrowser winreg wsgiref xdrlib xml xmlrpc zipapp zipfile zipimport zlib zoneinfo
+""".split()
+STDLIB = set(getattr(sys, "stdlib_module_names", _STDLIB_39)) | {"__future__", "_thread"}
