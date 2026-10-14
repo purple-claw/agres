@@ -650,3 +650,18 @@ class ReviewFixesMigrateTest(MigrateCase):
         self.assertEqual(migrate.cli(a), 0)
         self.assertEqual(agres_dirs(p), [".agres"])
         self.assertIn("packages/pulsar", {r["origin"] for r in self.items(p)})
+
+
+class NestedRepoAllTest(MigrateCase):
+    def test_all_keeps_a_nested_git_repo_as_its_own_project(self):
+        import argparse
+        p = self.install()
+        inner = os.path.join(p, "packages", "pulsar")
+        os.makedirs(os.path.join(inner, ".git"))  # pulsar becomes its own repo inside p
+        a = argparse.Namespace(target=os.path.join(self.home, "work"), all=True, dry_run=False, rollback=False,
+                               global_=False, routes=None)
+        self.assertEqual(migrate.cli(a), 0)
+        self.assertTrue(os.path.isdir(os.path.join(inner, ".agres")))
+        with db.Store(inner) as s:
+            self.assertGreater(s.one("SELECT COUNT(*) FROM items")[0], 0)
+        self.assertNotIn("packages/pulsar", {r["origin"] for r in self.items(p)})

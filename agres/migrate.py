@@ -383,7 +383,9 @@ def cli(a) -> int:
         if a.all:  # nested strays go with their enclosing project; the global ~/.agres has its own path
             skipped = [r for r in roots if paths.is_forbidden_root(r)]
             roots = sorted({paths.git_root(r) or r for r in roots if not paths.is_forbidden_root(r)})
-            roots = [r for r in roots if not any(r != o and r.startswith(o + os.sep) for o in roots)]
+            # a store under another root is that root's stray only if it isn't its own git repo
+            roots = [r for r in roots if not any(r != o and r.startswith(o + os.sep) and paths.git_root(r) != r
+                                                 for o in roots)]
             if skipped:
                 print(f"(skipping {', '.join(skipped)}: the old global store — use `agres migrate --global`)")
         if not roots or roots == [None]:
