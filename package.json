@@ -35,6 +35,7 @@
     ".claude-plugin/",
     "hooks/",
     "agres/**/*.py",
+    "agres/web/",
     "skill/",
     "README.md",
     "LICENSE"

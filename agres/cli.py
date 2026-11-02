@@ -19,7 +19,6 @@ from .util import cutoff_iso
 DEPRECATED = {
     "budget": "window budgets were removed in agres 1.0 (the pack is sized by `config budget_chars`).",
     "window": "the window manifest was removed in agres 1.0; see `agres status`.",
-    "graph": "use `agres map --query ...` (code skeleton) or `agres search ...` instead of `graph`.",
     "event": "generic events were removed in agres 1.0; use `agres note \"...\"`.",
 }
 
@@ -415,6 +414,18 @@ def cmd_status(a):
         print(status.render(s, deep=a.deep or a.cmd == "trace", as_json=a.json))
 
 
+def cmd_graph(a):
+    from . import graphserve
+    with _open(a, create=False) as s:
+        root = s.root
+        if a.index:
+            from .code import engine
+            print("indexing…", file=sys.stderr)
+            engine.sync(s)
+            engine.ensure_resolved(s)
+    graphserve.serve(root, host=a.host, port=a.port, open_browser=not a.no_open)
+
+
 def cmd_dash(a):
     from . import dash
     with _open(a, create=False) as s:
@@ -550,6 +561,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("status", cmd_status, "what's stored, index health, settings", aliases=["trace"])
     sp.add_argument("--deep", action="store_true")
     sp.add_argument("--json", action="store_true")
+    sp = add("graph", cmd_graph, "live animated graph of the code index + memory in your browser",
+             aliases=["serve"])
+    sp.add_argument("--port", type=int, default=7357, help="port (default 7357; a free one if taken)")
+    sp.add_argument("--host", default="127.0.0.1", help="bind address (default 127.0.0.1, local only)")
+    sp.add_argument("--no-open", action="store_true", help="don't open a browser")
+    sp.add_argument("--index", action="store_true", help="build / re-sync the code index first")
     sp = add("dash", cmd_dash, "full-screen dashboard: memory, next session, origami, activity, hooks, code, privacy",
              aliases=["dashboard"])
     sp.add_argument("--watch", type=float, metavar="SECS", help="redraw every SECS seconds (Ctrl-C quits)")

@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agres graph</title>
+<link rel="icon" href="data:,">
+<style>
+:root{
+  --bg:#07090D; --panel:#10131A; --panel2:#161A22; --line:#232833; --line2:#2C3340;
+  --text:#E6E8EB; --muted:#9AA3AF; --dim:#6B7380;
+  --file:#6AA8FF; --symbol:#C9D1D9; --package:#B392F0; --memory:#F5A65B; --rejected:#F47067; --fold:#5ECF8C; --pin:#FFD27A;
+  --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  --sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:14px/1.45 var(--sans)}
+button,input,select{font:inherit;color:inherit}
+.app{display:grid;grid-template-rows:auto 1fr;height:100%}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:14px;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
+.brand{display:flex;align-items:center;gap:10px}
+.brand b{font-weight:600}
+.mono{font-family:var(--mono)}
+.muted{color:var(--muted)}
+.seg{display:flex;gap:3px;padding:3px;border-radius:8px;background:var(--panel2);border:1px solid var(--line2)}
+.seg button{height:30px;padding:0 12px;border:0;border-radius:6px;background:transparent;color:var(--muted);cursor:pointer}
+.seg button[aria-pressed="true"]{background:#2B3442;color:#F2F4F7}
+.search{flex:1 1 240px;max-width:420px;min-width:180px;display:flex;align-items:center;gap:8px;height:36px;padding:0 10px;border-radius:8px;background:var(--panel2);border:1px solid var(--line2)}
+.search input{flex:1;min-width:0;border:0;outline:0;background:transparent}
+kbd{font-family:var(--mono);font-size:11px;color:var(--muted);border:1px solid #353C49;border-radius:4px;padding:0 5px}
+.live{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--fold)}
+.dot.on{animation:pulse 2s infinite}
+.dot.off{background:#6B7380}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(94,207,140,.55)}70%{box-shadow:0 0 0 7px rgba(94,207,140,0)}100%{box-shadow:0 0 0 0 rgba(94,207,140,0)}}
+.iconbtn{height:34px;min-width:34px;padding:0 10px;border-radius:8px;background:var(--panel2);border:1px solid var(--line2);cursor:pointer}
+.iconbtn:hover,.seg button:hover{color:#F2F4F7}
+.body{display:flex;min-height:0}
+aside{background:var(--panel);overflow:auto}
+.left{width:236px;flex:none;border-right:1px solid var(--line);padding:16px;display:flex;flex-direction:column;gap:20px}
+.right{width:340px;flex:none;border-left:1px solid var(--line);padding:18px;display:flex;flex-direction:column;gap:16px}
+h2,h3{margin:0;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.check{display:flex;align-items:center;gap:10px;min-height:30px;cursor:pointer}
+.check input{width:16px;height:16px;margin:0;accent-color:var(--file)}
+.check .n{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--muted)}
+.sw{width:12px;height:12px;flex:none;border-radius:50%}
+.sw.d{border-radius:2px;transform:rotate(45deg)}
+.ln{width:18px;height:0;flex:none;border-top:2px solid}
+.ln.dash{border-top-style:dashed}
+.stage{position:relative;flex:1;min-width:0}
+canvas{display:block;width:100%;height:100%;cursor:grab}
+canvas.drag{cursor:grabbing}
+.ctrls{position:absolute;left:14px;bottom:14px;display:flex;gap:6px}
+.toast{position:absolute;right:14px;bottom:14px;display:flex;flex-direction:column;gap:6px;align-items:flex-end;pointer-events:none}
+.toast div{padding:7px 11px;border-radius:8px;background:#161A22e6;border:1px solid var(--line2);font-size:12px;color:#C9D1D9;transition:opacity .6s}
+.tip{position:absolute;pointer-events:none;padding:6px 9px;border-radius:6px;background:#0B0D11ee;border:1px solid var(--line2);font-size:12px;max-width:360px;display:none}
+.kind{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.title{margin:4px 0 0;font-family:var(--mono);font-size:16px;font-weight:500;color:#F2F4F7;word-break:break-all}
+.desc{margin:0;color:#B6BEC9;white-space:pre-wrap;word-break:break-word;max-height:220px;overflow:auto}
+.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.stat{padding:9px;border-radius:8px;background:var(--panel2);border:1px solid #262C37}
+.stat .k{font-size:11px;color:var(--muted)}
+.stat .v{font-family:var(--mono);font-size:15px;color:#F2F4F7;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.links{display:flex;flex-direction:column;gap:6px}
+.link{display:flex;align-items:center;gap:10px;min-height:38px;padding:5px 10px;border-radius:8px;background:#161A21;border:1px solid var(--line);text-align:left;cursor:pointer}
+.link:hover{border-color:#3A4352}
+.link .l{flex:1;min-width:0;font-family:var(--mono);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.link .r{font-size:11px;color:var(--muted)}
+code.cmd{display:block;padding:9px 11px;border-radius:8px;background:#0B0D11;border:1px solid var(--line);font-family:var(--mono);font-size:12px;color:#C9D1D9;white-space:pre-wrap}
+.empty{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:#07090Dcc}
+.empty.show{display:flex}
+.card{max-width:520px;padding:32px;display:flex;flex-direction:column;gap:16px}
+.card h1{margin:0;font-size:24px;font-weight:600}
+.primary{height:44px;padding:0 18px;border-radius:8px;border:0;background:var(--file);color:#0B0D11;font-weight:600;cursor:pointer}
+.ghost{height:44px;padding:0 18px;border-radius:8px;border:1px solid var(--line2);background:var(--panel2);cursor:pointer}
+:focus-visible{outline:2px solid #7DB4FF;outline-offset:2px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+@media (max-width: 1100px){.right{width:290px}.left{width:200px}}
+@media (max-width: 860px){.body{flex-direction:column}.left,.right{width:auto;border:0;max-height:34vh}.stage{min-height:56vh}}
+@media (prefers-reduced-motion: reduce){.dot.on{animation:none}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="brand">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#7DB4FF" stroke-width="1.8" aria-hidden="true"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="8" r="3"/><circle cx="11" cy="18" r="3"/><path d="M8.6 7.2l6.6.8M7.4 8.6l2.4 6.8M16.6 10.4l-4 5.4"/></svg>
+      <b>agres graph</b><span class="mono muted" id="project" style="font-size:12px"></span>
+    </div>
+    <div class="seg" role="group" aria-label="Level">
+      <button type="button" data-level="files" aria-pressed="true">Files</button>
+      <button type="button" data-level="symbols" aria-pressed="false">Symbols</button>
+    </div>
+    <div class="seg" role="group" aria-label="Lens">
+      <button type="button" data-lens="code" aria-pressed="false">Code</button>
+      <button type="button" data-lens="memory" aria-pressed="false">Memory</button>
+      <button type="button" data-lens="both" aria-pressed="true">Both</button>
+    </div>
+    <label class="search">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9AA3AF" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+      <span class="sr">Search nodes</span>
+      <input id="q" type="search" placeholder="Search files, symbols, D12, F7…" autocomplete="off">
+      <kbd>/</kbd>
+    </label>
+    <button type="button" class="iconbtn" id="pause" aria-pressed="false">Pause motion</button>
+    <div class="live"><span class="dot on" id="dot"></span><span id="livetext">Connecting…</span><span class="mono" id="addr"></span></div>
+  </header>
+  <div class="body">
+    <aside class="left" aria-label="Filters">
+      <section style="display:flex;flex-direction:column;gap:6px"><h2>Show</h2><div id="kinds"></div></section>
+      <section style="display:flex;flex-direction:column;gap:6px"><h2>Signals</h2><div id="ekinds"></div></section>
+      <section style="display:flex;flex-direction:column;gap:6px">
+        <h2>Pulse rate</h2>
+        <label class="sr" for="rate">Pulse rate</label>
+        <input id="rate" type="range" min="0" max="3" step="0.25" value="1" style="accent-color:#6AA8FF">
+      </section>
+      <section class="muted" style="margin-top:auto;font-size:12px;line-height:1.6" id="stats"></section>
+    </aside>
+    <main class="stage" aria-label="Graph">
+      <canvas id="cv" aria-label="Animated graph of indexed code and project memory. Use search and the inspector to navigate by keyboard."></canvas>
+      <div class="tip" id="tip"></div>
+      <div class="ctrls">
+        <button type="button" class="iconbtn" id="zin" aria-label="Zoom in">+</button>
+        <button type="button" class="iconbtn" id="zout" aria-label="Zoom out">−</button>
+        <button type="button" class="iconbtn" id="fit">Fit</button>
+        <button type="button" class="iconbtn" id="clear">Clear focus</button>
+      </div>
+      <div class="toast" id="toast" aria-live="polite"></div>
+      <div class="empty" id="empty">
+        <div class="card">
+          <h1>No code graph for <span class="mono" id="eproj"></span> yet</h1>
+          <p class="muted" style="margin:0">Agres indexes code on demand. Memory is already here; build the index to see the files it points at.</p>
+          <div style="display:flex;flex-wrap:wrap;gap:10px">
+            <button type="button" class="primary" id="build">Build index now</button>
+            <button type="button" class="ghost" id="memonly">Show memory only</button>
+          </div>
+          <code class="cmd">agres index    # or: agres graph --index</code>
+          <p class="muted" style="margin:0;font-size:12px" id="ebusy">The page updates by itself once indexing finishes.</p>
+        </div>
+      </div>
+    </main>
+    <aside class="right" aria-label="Inspector" id="insp"></aside>
+  </div>
+</div>
+<script>
+(() => {
+"use strict";
+const COLORS = {file:"#6AA8FF", symbol:"#C9D1D9", package:"#B392F0", memory:"#F5A65B", rejected:"#F47067", fold:"#5ECF8C", pin:"#FFD27A", task:"#F5A65B", error:"#F47067", note:"#E7B98A", decision:"#F5A65B"};
+const EDGE = {imports:"#5A6B86", calls:"#6AA8FF", defines:"#3E4656", inherits:"#B392F0", mentions:"#F5A65B"};
+const KINDS = [["file","Files","o"],["symbol","Symbols","o"],["package","Packages","o"],["memory","Memory","d"]];
+const EKINDS = [["imports","Imports",false],["calls","Calls",false],["defines","Defines",false],["inherits","Inherits",false],["mentions","Memory → file",true]];
+const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const $ = (id) => document.getElementById(id);
+const cv = $("cv"), ctx = cv.getContext("2d");
+let W = 0, H = 0, DPR = 1;
+const st = {glowBase:.12, level:"files", lens:"both", q:"", paused:reduce, rate:1, hiddenK:{}, hiddenE:{}, sel:null, hover:null,
+  nodes:new Map(), edges:[], adj:new Map(), view:{x:0,y:0,k:1}, pulses:[], alpha:1, lastUpdate:0, data:null, memOnly:false};
+
+function el(tag, attrs, ...kids){ const e=document.createElement(tag); for(const [k,v] of Object.entries(attrs||{})){ if(k==="class") e.className=v; else if(k==="style") e.style.cssText=v; else if(k.startsWith("on")) e.addEventListener(k.slice(2),v); else e.setAttribute(k,v);} for(const k of kids){ if(k==null) continue; e.append(k.nodeType?k:document.createTextNode(String(k)));} return e; }
+function colorOf(n){ if(n.kind!=="memory") return COLORS[n.kind]||"#999"; return n.sub==="pin" && n.critical ? COLORS.pin : (COLORS[n.sub]||COLORS.memory); }
+function kindLabel(n){ if(n.kind==="memory"){ const m={pin:"Pin",decision:"Decision",rejected:"Decision · rejected",task:"Task",error:"Error",note:"Note",fold:"Fold"}; return (m[n.sub]||"Memory")+(n.status&&n.sub!=="rejected"?" · "+n.status:"")+(n.tag?" "+n.tag:""); } return n.kind==="symbol"?("Symbol · "+(n.sub||"")):n.kind==="package"?"Package · external":"File · "+(n.lang||""); }
+function ago(ms){ const s=Math.round((Date.now()-ms)/1000); return s<5?"just now":s<60?s+"s ago":s<3600?Math.round(s/60)+"m ago":Math.round(s/3600)+"h ago"; }
+
+// ------------------------------------------------------------- data
+async function load(flashIds){
+  let g;
+  try { const r = await fetch(`/api/graph?level=${st.level}&limit=${st.level==="files"?400:450}`); g = await r.json(); }
+  catch(e){ toast("Could not load the graph: "+e.message); return; }
+  st.data = g;
+  $("project").textContent = g.project; $("eproj").textContent = g.project;
+  document.title = "agres graph · "+g.project;
+  $("empty").classList.toggle("show", !g.indexed && !st.memOnly);
+  $("ebusy").textContent = g.indexing ? "Indexing… the page updates by itself." : "The page updates by itself once indexing finishes.";
+  $("build").disabled = !!g.indexing;
+  const old = st.nodes, next = new Map();
+  const ranks = g.nodes.filter(n=>n.kind!=="memory").map(n=>n.rank).sort((a,b)=>a-b);
+  const pct = (v)=>{ if(!ranks.length) return .5; let lo=0,hi=ranks.length; while(lo<hi){const m=(lo+hi)>>1; if(ranks[m]<v) lo=m+1; else hi=m;} return lo/ranks.length; };
+  for(const n of g.nodes){
+    const o = old.get(n.id);
+    const p = n.kind==="memory" ? .55 : pct(n.rank);
+    const r = n.kind==="symbol" ? 2.5+p*6 : n.kind==="memory" ? 5.5 : n.kind==="package" ? 5 : 3.5+p*p*13;
+    next.set(n.id, Object.assign(o||{x:(Math.random()-.5)*600, y:(Math.random()-.5)*600, vx:0, vy:0, fire:0, phase:Math.random()*6.28}, n, {r, color:colorOf(n), deg:0}));
+  }
+  st.edges = g.edges.filter(e=>next.has(e.source)&&next.has(e.target)).map(e=>({...e, s:next.get(e.source), t:next.get(e.target), w:Math.min(4, 0.6+Math.log2(1+e.weight))}));
+  st.adj = new Map();
+  for(const e of st.edges){ e.s.deg++; e.t.deg++; push(st.adj,e.s.id,e); push(st.adj,e.t.id,e); }
+  for(const n of next.values()){ if(!old.has(n.id)){ const nb=(st.adj.get(n.id)||[])[0]; const o=nb&&old.get(nb.s.id===n.id?nb.t.id:nb.s.id); if(o){ n.x=o.x+(Math.random()-.5)*40; n.y=o.y+(Math.random()-.5)*40; } } }
+  const first = !old.size;
+  st.nodes = next; st.alpha = first ? 1 : Math.max(st.alpha, .35);
+  st.glowBase = Math.max(.04, Math.min(.16, 6/Math.sqrt(next.size+1)*.1));
+  if(st.sel && !next.has(st.sel)) st.sel = null;
+  buildFilters(); stats(); inspector();
+  if(first){ for(let i=0;i<220;i++) tick(true); fit(); st.touched=false;
+    for(const ms of [900,2200,4000]) setTimeout(()=>{ if(!st.touched) fit(); }, ms); }
+  for(const id of flashIds||[]){ const n=next.get(id); if(n){ n.fire=2; for(const e of st.adj.get(id)||[]) spawn(e, e.s===n?1:-1); } }
+  st.lastUpdate = Date.now();
+}
+function push(m,k,v){ let a=m.get(k); if(!a){a=[];m.set(k,a);} a.push(v); }
+
+// ---------------------------------------------------------- filters
+function visible(n){
+  if(st.hiddenK[n.kind]) return false;
+  if(st.lens==="code" && n.kind==="memory") return false;
+  if(st.lens==="memory" && !(n.kind==="memory" || (n.kind==="file" && (st.adj.get(n.id)||[]).some(e=>e.kind==="mentions")))) return false;
+  return true;
+}
+const evis = (e) => !st.hiddenE[e.kind] && visible(e.s) && visible(e.t);
+function buildFilters(){
+  const cnt = {}; for(const n of st.nodes.values()) cnt[n.kind]=(cnt[n.kind]||0)+1;
+  const ecnt = {}; for(const e of st.edges) ecnt[e.kind]=(ecnt[e.kind]||0)+1;
+  $("kinds").replaceChildren(...KINDS.map(([k,l,sh])=>check(l, cnt[k]||0, !st.hiddenK[k], el("span",{class:"sw"+(sh==="d"?" d":""),style:`background:${COLORS[k]}`}), ()=>{st.hiddenK[k]=!st.hiddenK[k]; st.alpha=Math.max(st.alpha,.2);})));
+  $("ekinds").replaceChildren(...EKINDS.filter(([k])=>ecnt[k]).map(([k,l,d])=>check(l, ecnt[k]||0, !st.hiddenE[k], el("span",{class:"ln"+(d?" dash":""),style:`border-color:${EDGE[k]}`}), ()=>{st.hiddenE[k]=!st.hiddenE[k];})));
+}
+function check(label, n, on, swatch, toggle){
+  const box = el("input",{type:"checkbox"}); box.checked = on; box.addEventListener("change", toggle);
+  return el("label",{class:"check"}, box, swatch, el("span",{}, label), el("span",{class:"n"}, n.toLocaleString()));
+}
+function stats(){
+  const s = st.data && st.data.stats; if(!s) return;
+  $("stats").replaceChildren(el("div",{class:"mono",style:"color:#C9D1D9"}, `${s.files} files · ${s.symbols} symbols · ${s.edges} edges`),
+    el("div",{}, `${s.items} memory items · ${s.folds} folds`), el("div",{}, `showing ${st.nodes.size} nodes · ${st.edges.length} links`));
+}
+
+// -------------------------------------------------------- simulation
+function tick(fast){
+  const ns = [...st.nodes.values()], a = st.alpha;
+  const n = ns.length;
+  for(let i=0;i<n;i++){ const p=ns[i]; if(!visible(p)) continue;
+    for(let j=i+1;j<n;j++){ const q=ns[j]; if(!visible(q)) continue;
+      let dx=q.x-p.x, dy=q.y-p.y, d2=dx*dx+dy*dy;
+      if(d2>360000) continue; if(d2<1){dx=Math.random()-.5;dy=Math.random()-.5;d2=1;}
+      const f = (2600+(p.r+q.r)*110) * a / d2, d=Math.sqrt(d2);
+      const fx=dx/d*f, fy=dy/d*f; p.vx-=fx; p.vy-=fy; q.vx+=fx; q.vy+=fy; } }
+  for(const e of st.edges){ if(!evis(e)) continue; const p=e.s,q=e.t;
+    const dx=q.x-p.x, dy=q.y-p.y, d=Math.sqrt(dx*dx+dy*dy)||1;
+    const L = e.kind==="defines"?40:e.kind==="mentions"?80:70+Math.min(90,(p.deg+q.deg)*1.2);
+    const k = (d-L)/d*0.09*a/Math.max(1,Math.min(p.deg,q.deg))*(e.kind==="mentions"?.8:1);
+    p.vx+=dx*k; p.vy+=dy*k; q.vx-=dx*k; q.vy-=dy*k; }
+  const t = performance.now()/1000;
+  for(const p of ns){
+    const gk = p.deg ? 0.0012 : 0.004;  // loners are pulled in harder so they orbit, not drift off
+    p.vx -= p.x*gk*a; p.vy -= p.y*gk*a;
+    if(!fast && !reduce && !st.paused){ p.vx += Math.sin(t*.7+p.phase)*.025; p.vy += Math.cos(t*.6+p.phase*1.3)*.025; }
+    if(p===st.drag){ p.vx=p.vy=0; continue; }
+    p.vx*=.82; p.vy*=.82; p.x+=p.vx; p.y+=p.vy;
+    p.fire = Math.max(0, p.fire-.025);
+  }
+  let cx=0, cy=0, c=0; for(const p of ns){ if(visible(p)){ cx+=p.x; cy+=p.y; c++; } }
+  if(c){ cx/=c; cy/=c; for(const p of ns){ if(p!==st.drag){ p.x-=cx; p.y-=cy; } } }  // no drift: centroid stays put
+  st.alpha = Math.max(st.paused?0:.045, st.alpha*.985);
+}
+function spawn(e, dir){ st.pulses.push({e, t:0, dir: dir|| (Math.random()<.85?1:-1), sp:(.006+Math.random()*.01)*(e.kind==="mentions"?.7:1)}); }
+
+// ------------------------------------------------------------ render
+function resize(){ const r = cv.getBoundingClientRect(); DPR = Math.min(2, devicePixelRatio||1); W=r.width; H=r.height; cv.width=W*DPR; cv.height=H*DPR; }
+const toS = (x,y)=>[(x-st.view.x)*st.view.k+W/2, (y-st.view.y)*st.view.k+H/2];
+const toW = (x,y)=>[(x-W/2)/st.view.k+st.view.x, (y-H/2)/st.view.k+st.view.y];
+function lit(){ const f=st.sel||st.hover; if(!f) return null; const s=new Set([f]); for(const e of st.adj.get(f)||[]) { s.add(e.s.id); s.add(e.t.id);} return s; }
+function frame(){
+  if(!st.paused) tick(false);
+  const vis = st.edges.filter(evis);
+  if(!st.paused && vis.length){ const want = (reduce?.05:.35)*st.rate*Math.sqrt(vis.length); let c = want + (Math.random()<want%1?1:0); while(c-- >= 1 && st.pulses.length<900) spawn(vis[(Math.random()*vis.length)|0]); }
+  draw(vis);
+  requestAnimationFrame(frame);
+}
+function draw(vis){
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  ctx.fillStyle="#07090D"; ctx.fillRect(0,0,W,H);
+  const g = ctx.createRadialGradient(W/2,H/2,0,W/2,H/2,Math.max(W,H)*.7); g.addColorStop(0,"rgba(40,60,100,.10)"); g.addColorStop(1,"rgba(0,0,0,0)"); ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  const L = lit(), k = st.view.k, q = st.q;
+  // links
+  ctx.lineCap="round";
+  for(const e of vis){
+    const [x1,y1]=toS(e.s.x,e.s.y), [x2,y2]=toS(e.t.x,e.t.y);
+    const on = !L || (L.has(e.s.id)&&L.has(e.t.id)&&(e.s.id===(st.sel||st.hover)||e.t.id===(st.sel||st.hover)));
+    ctx.globalAlpha = on ? (L?.75:.16+Math.min(.2,e.w*.04)) : .04;
+    ctx.strokeStyle = EDGE[e.kind]||"#555"; ctx.lineWidth = Math.max(.5, e.w*.55*Math.sqrt(k));
+    ctx.setLineDash(e.kind==="mentions"?[4,4]:[]);
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  // pulses (signals travelling along synapses)
+  ctx.globalCompositeOperation="lighter";
+  const keep=[];
+  for(const p of st.pulses){
+    if(!st.paused) p.t += p.sp*(1+st.rate*.3);
+    if(p.t>=1){ const tgt = p.dir>0?p.e.t:p.e.s; tgt.fire=Math.min(1.6,tgt.fire+.55); continue; }
+    if(!evis(p.e)) continue;
+    keep.push(p);
+    const a=p.dir>0?p.e.s:p.e.t, b=p.dir>0?p.e.t:p.e.s;
+    const dim = L && !(L.has(a.id)&&L.has(b.id)) ? .15 : 1;
+    for(let i=0;i<4;i++){ const tt=Math.max(0,p.t-i*.035); const [x,y]=toS(a.x+(b.x-a.x)*tt, a.y+(b.y-a.y)*tt);
+      ctx.globalAlpha=(1-i*.24)*.75*dim; ctx.fillStyle=EDGE[p.e.kind]==="#3E4656"?"#8892A6":(EDGE[p.e.kind]||"#fff");
+      ctx.beginPath(); ctx.arc(x,y,Math.max(1,(2.2-i*.4)*Math.sqrt(k)),0,6.283); ctx.fill(); }
+  }
+  st.pulses = keep;
+  // node glow
+  for(const n of st.nodes.values()){ if(!visible(n)) continue;
+    const [x,y]=toS(n.x,n.y), r=n.r*Math.sqrt(k); if(x<-60||y<-60||x>W+60||y>H+60) continue;
+    const dim = L && !L.has(n.id) ? .12 : 1;
+    const glow = (st.glowBase + n.fire*.4)*dim; if(glow<.02) continue;
+    const gr = ctx.createRadialGradient(x,y,0,x,y,r*(3.2+n.fire*2));
+    gr.addColorStop(0, hexA(n.color, glow)); gr.addColorStop(.35, hexA(n.color, glow*.35)); gr.addColorStop(1, hexA(n.color, 0));
+    ctx.globalAlpha=1; ctx.fillStyle=gr; ctx.beginPath(); ctx.arc(x,y,r*(2.6+n.fire*2),0,6.283); ctx.fill(); }
+  ctx.globalCompositeOperation="source-over";
+  // node cores + labels
+  ctx.textBaseline="middle"; ctx.font=`11px ${getComputedStyle(document.body).getPropertyValue("--mono")}`;
+  for(const n of st.nodes.values()){ if(!visible(n)) continue;
+    const [x,y]=toS(n.x,n.y), r=Math.max(1.6,n.r*Math.sqrt(k)); if(x<-40||y<-40||x>W+40||y>H+40) continue;
+    const dim = L && !L.has(n.id) ? .18 : 1, match = q && (n.label+" "+(n.path||"")).toLowerCase().includes(q);
+    ctx.globalAlpha=dim; ctx.fillStyle = n.fire>.05 ? mix(n.color,"#FFFFFF",Math.min(.7,n.fire*.45)) : n.color;
+    ctx.strokeStyle=n.color; ctx.lineWidth=1.5;
+    ctx.beginPath();
+    if(n.kind==="memory"){ ctx.moveTo(x,y-r*1.25); ctx.lineTo(x+r*1.25,y); ctx.lineTo(x,y+r*1.25); ctx.lineTo(x-r*1.25,y); ctx.closePath(); }
+    else ctx.arc(x,y,r,0,6.283);
+    if(n.sub==="rejected"){ ctx.setLineDash([3,2]); ctx.stroke(); ctx.setLineDash([]); } else ctx.fill();
+    if(n.id===st.sel || match){ ctx.globalAlpha=1; ctx.strokeStyle=n.id===st.sel?"#FFFFFF":"#F2F4F7"; ctx.lineWidth=1.5; ctx.beginPath(); ctx.arc(x,y,r+4,0,6.283); ctx.stroke(); }
+    const showLabel = n.id===st.sel || n.id===st.hover || match || (L ? L.has(n.id) && (k>.8 || n.r>8) : (k>1.7 || (k>.9 && (n.r>9 || n.kind==="memory")) || n.r>13));
+    if(showLabel){ const txt = n.kind==="file" ? n.label.split("/").slice(-2).join("/") : n.label;
+      ctx.globalAlpha = Math.min(1,dim+.1); ctx.fillStyle="#07090D"; ctx.fillText(txt, x+r+5.5, y+.6); ctx.fillStyle = n.kind==="symbol"?"#AEB6C2":"#E6E8EB"; ctx.fillText(txt, x+r+5, y); }
+  }
+  ctx.globalAlpha=1;
+}
+function hexA(h,a){ const n=parseInt(h.slice(1),16); return `rgba(${n>>16},${(n>>8)&255},${n&255},${a})`; }
+function mix(h1,h2,t){ const a=parseInt(h1.slice(1),16), b=parseInt(h2.slice(1),16); const c=(s)=>Math.round(((a>>s)&255)*(1-t)+((b>>s)&255)*t); return `rgb(${c(16)},${c(8)},${c(0)})`; }
+function fit(){ const vs=[...st.nodes.values()].filter(visible); if(!vs.length) return;
+  const xs=vs.map(n=>n.x).sort((a,b)=>a-b), ys=vs.map(n=>n.y).sort((a,b)=>a-b), q=(a,f)=>a[Math.min(a.length-1,Math.max(0,Math.round(f*(a.length-1))))];
+  const x0=q(xs,.04), x1=q(xs,.96), y0=q(ys,.04), y1=q(ys,.96);  // ignore stray outliers
+  st.view.x=(x0+x1)/2; st.view.y=(y0+y1)/2; st.view.k=Math.max(.15,Math.min(2.5,Math.min(W/(x1-x0+160),H/(y1-y0+160)))); }
+
+// ------------------------------------------------------- interaction
+function nodeAt(sx,sy){ const [x,y]=toW(sx,sy); let best=null,bd=1e9; for(const n of st.nodes.values()){ if(!visible(n)) continue; const d=Math.hypot(n.x-x,n.y-y); const hit=(n.r+6)/Math.sqrt(st.view.k)+2; if(d<hit&&d<bd){best=n;bd=d;} } return best; }
+let down=null;
+cv.addEventListener("pointerdown",(ev)=>{ st.touched=true; cv.setPointerCapture(ev.pointerId); const n=nodeAt(ev.offsetX,ev.offsetY); down={x:ev.offsetX,y:ev.offsetY,vx:st.view.x,vy:st.view.y,n,moved:false}; if(n){ st.drag=n; } cv.classList.add("drag"); });
+cv.addEventListener("pointermove",(ev)=>{
+  if(down){ const dx=ev.offsetX-down.x, dy=ev.offsetY-down.y; if(Math.abs(dx)+Math.abs(dy)>3) down.moved=true;
+    if(down.n){ const [x,y]=toW(ev.offsetX,ev.offsetY); down.n.x=x; down.n.y=y; st.alpha=Math.max(st.alpha,.25);} else { st.view.x=down.vx-dx/st.view.k; st.view.y=down.vy-dy/st.view.k; } return; }
+  const n=nodeAt(ev.offsetX,ev.offsetY); st.hover=n?n.id:null; cv.style.cursor=n?"pointer":"grab";
+  const tip=$("tip"); if(n){ tip.style.display="block"; tip.style.left=(ev.offsetX+14)+"px"; tip.style.top=(ev.offsetY+12)+"px"; tip.replaceChildren(el("div",{class:"kind"},kindLabel(n)), el("div",{class:"mono"},n.label)); } else tip.style.display="none"; });
+cv.addEventListener("pointerup",(ev)=>{ cv.classList.remove("drag"); if(down&&!down.moved){ const n=down.n; select(n?n.id:null, false); } st.drag=null; down=null; });
+cv.addEventListener("pointerleave",()=>{ st.hover=null; $("tip").style.display="none"; });
+cv.addEventListener("wheel",(ev)=>{ ev.preventDefault(); st.touched=true; const [wx,wy]=toW(ev.offsetX,ev.offsetY); const f=Math.exp(-ev.deltaY*.0015); st.view.k=Math.max(.08,Math.min(6,st.view.k*f)); const [nx,ny]=toW(ev.offsetX,ev.offsetY); st.view.x+=wx-nx; st.view.y+=wy-ny; },{passive:false});
+cv.addEventListener("dblclick",(ev)=>{ if(!nodeAt(ev.offsetX,ev.offsetY)) fit(); });
+$("zin").onclick=()=>{st.view.k=Math.min(6,st.view.k*1.25);}; $("zout").onclick=()=>{st.view.k=Math.max(.08,st.view.k/1.25);};
+$("fit").onclick=fit; $("clear").onclick=()=>select(null);
+$("pause").onclick=()=>{ st.paused=!st.paused; $("pause").setAttribute("aria-pressed",String(st.paused)); $("pause").textContent=st.paused?"Resume motion":"Pause motion"; };
+$("pause").textContent = st.paused?"Resume motion":"Pause motion"; $("pause").setAttribute("aria-pressed",String(st.paused));
+$("rate").oninput=(e)=>{ st.rate=+e.target.value; };
+for(const b of document.querySelectorAll("[data-level]")) b.onclick=()=>{ st.level=b.dataset.level; for(const x of document.querySelectorAll("[data-level]")) x.setAttribute("aria-pressed",String(x===b)); st.nodes=new Map(); st.pulses=[]; st.sel=null; load(); };
+for(const b of document.querySelectorAll("[data-lens]")) b.onclick=()=>{ st.lens=b.dataset.lens; for(const x of document.querySelectorAll("[data-lens]")) x.setAttribute("aria-pressed",String(x===b)); st.alpha=Math.max(st.alpha,.3); setTimeout(fit,400); };
+$("q").addEventListener("input",(e)=>{ st.q=e.target.value.trim().toLowerCase(); });
+$("q").addEventListener("keydown",(e)=>{ if(e.key==="Enter"){ const m=[...st.nodes.values()].find(n=>visible(n)&&(n.label+" "+(n.path||"")).toLowerCase().includes(st.q)); if(m) select(m.id,true); } });
+addEventListener("keydown",(e)=>{ if(e.key==="/" && document.activeElement!==$("q")){ e.preventDefault(); $("q").focus(); } else if(e.key==="Escape"){ select(null); } });
+$("build").onclick=async()=>{ $("build").disabled=true; $("ebusy").textContent="Indexing… the page updates by itself."; try{ await fetch("/api/index",{method:"POST"}); }catch(e){ $("ebusy").textContent="Could not start indexing: "+e.message; } };
+$("memonly").onclick=()=>{ st.memOnly=true; $("empty").classList.remove("show"); };
+
+function select(id, center){
+  st.sel=id; inspector();
+  const n=id&&st.nodes.get(id); if(n){ n.fire=1.6; for(const e of st.adj.get(id)||[]) spawn(e, e.s===n?1:-1); if(center){ st.view.x=n.x; st.view.y=n.y; st.view.k=Math.max(st.view.k,1.2);} }
+}
+function inspector(){
+  const box=$("insp"), n=st.sel&&st.nodes.get(st.sel);
+  if(!n){ box.replaceChildren(el("h2",{style:"font-size:15px;letter-spacing:0;text-transform:none;color:#F2F4F7"},"Pick a node"),
+      el("p",{class:"desc"},"Click a file, symbol or memory item to see what it connects to. Its neighbours stay lit and fire signals; everything else dims."),
+      el("p",{class:"desc"},"Orange diamonds are memory: decisions, pins, tasks, folds. Dashed orange links go to the files they mention."),
+      el("p",{class:"desc muted"},"Drag nodes · drag the background to pan · scroll to zoom · double-click to fit · / to search · Esc to clear")); return; }
+  const links=(st.adj.get(n.id)||[]).map(e=>{ const o=e.s===n?e.t:e.s; const rel=e.kind==="mentions"?(e.s===n?"mentions":"mentioned by"):e.kind==="defines"?(e.s===n?"defines":"defined in"):(e.s===n?e.kind:e.kind==="imports"?"imported by":e.kind==="calls"?"called by":e.kind); return {o,rel,w:e.weight}; }).sort((a,b)=>b.w-a.w).slice(0,40);
+  const desc = n.kind==="memory" ? (n.text||"")+(n.why?"\n\nwhy: "+n.why:"") : n.kind==="symbol" ? (n.sig||n.label)+(n.path?`\n${n.path}:${n.line||""}`:"") : (n.path||n.label);
+  const statsArr = n.kind==="memory" ? [["Links",links.length],["Status",n.status||"—"],[n.sub==="fold"?"Lines":"Updated", n.sub==="fold"?(n.lines||"—"):(n.updated||"").slice(5,10)]] :
+    [["Rank",(n.rank*1000).toFixed(1)+"‰"],["Links",links.length],["Kind",n.sub||n.kind]];
+  const cmd = n.kind==="memory" ? (n.sub==="fold"?`agres unfold ${n.id} --grep error`:`agres show ${n.id}`) : n.kind==="file" ? `agres map --focus ${n.path}` : `agres search "${n.label}"`;
+  box.replaceChildren(
+    el("div",{}, el("div",{class:"kind"},kindLabel(n)), el("h2",{class:"title",style:"letter-spacing:0;text-transform:none"},n.label)),
+    el("p",{class:"desc"},desc),
+    el("div",{class:"stats"},...statsArr.map(([k,v])=>el("div",{class:"stat"},el("div",{class:"k"},k),el("div",{class:"v"},String(v))))),
+    el("section",{class:"links"}, el("h3",{},`Connected (${links.length})`), ...links.map(({o,rel})=>el("button",{type:"button",class:"link",onclick:()=>select(o.id,true)}, el("span",{class:"sw"+(o.kind==="memory"?" d":""),style:`background:${o.color}`}), el("span",{class:"l"},o.label), el("span",{class:"r"},rel)))),
+    el("section",{style:"display:flex;flex-direction:column;gap:6px"}, el("h3",{},"In the terminal"), el("code",{class:"cmd"},cmd)));
+}
+function toast(msg){ const d=el("div",{},msg); $("toast").prepend(d); while($("toast").children.length>3) $("toast").lastChild.remove(); setTimeout(()=>{d.style.opacity="0"; setTimeout(()=>d.remove(),700);},4500); }
+
+// -------------------------------------------------------------- live
+function connect(){
+  const es = new EventSource("/api/events");
+  es.addEventListener("changed", async (ev)=>{
+    const m = JSON.parse(ev.data); $("dot").className="dot on";
+    if(m.first) return;
+    await load(m.changed||[]);
+    const names = (m.changed||[]).map(id=>{ const n=st.nodes.get(id); return n?(n.kind==="file"?n.path:n.label):null; }).filter(Boolean);
+    toast(names.length ? `Changed: ${names.slice(0,3).join(", ")}${names.length>3?` +${names.length-3}`:""}` : m.indexing ? "Indexing…" : "Store updated");
+  });
+  es.onopen=()=>{ $("dot").className="dot on"; };
+  es.onerror=()=>{ $("dot").className="dot off"; $("livetext").textContent="Reconnecting…"; };
+}
+setInterval(()=>{ if($("dot").className.includes("on") && st.lastUpdate) $("livetext").textContent="Live · updated "+ago(st.lastUpdate); },1000);
+$("addr").textContent = location.host;
+addEventListener("resize",resize); resize();
+load().then(()=>{ connect(); requestAnimationFrame(frame); inspector(); });
+})();
+</script>
+</body>
+</html>
