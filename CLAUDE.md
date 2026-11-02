@@ -9,7 +9,7 @@ file per project. Spec/plan/ADR: `docs/plans/agres-v1-spec.md`, `docs/plans/agre
   `agres/code/` (index engine: discover, indexer, resolve, rank, repomap, gitwalk, langs, engine),
   `skill/agres/` (the shipped skill), `tests/` (unittest; `tests/helpers.py` fakes `$HOME`).
 - Invariants: hooks always exit 0 and print only on SessionStart/UserPromptSubmit; nothing is hard-deleted
-  (supersede/retire); `/` and `$HOME` are never project roots; the prompt/stop hook path must not import
+  (supersede/retire) — **except captured turns** (`forget M<id>`/`--session`, `gc`, retention); `/` and `$HOME` are never project roots; the prompt/stop hook path must not import
   `agres.code` (latency: SessionStart p95 < 300 ms, prompt < 100 ms).
 - Tests never touch the real `~/.agres`, `~/.claude` or project stores — use `TempHome`.
 - Conventional commits; one concern per commit.

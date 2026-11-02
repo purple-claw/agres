@@ -14,6 +14,7 @@ from typing import Optional
 
 from . import __version__, config, db, memory, paths
 from .memory import fmt_id, parse_id
+from .util import cutoff_iso
 
 DEPRECATED = {
     "fold": "context folding was removed in agres 1.0: Claude Code owns the context window. "
@@ -148,12 +149,39 @@ def cmd_drop(a):
 
 
 def cmd_forget(a):
-    with _open(a) as s:
-        try:
-            memory.forget(s, _item_id(a.id))
-        except ValueError as e:
-            raise UserError(str(e))
-        print(f"{a.id.upper()} forgotten (text redacted, tombstone kept)")
+    """Items (P/D/T/E/N/H) keep a redacted tombstone; turns (M ids, --session) are hard-deleted."""
+    if not a.ids and not a.session:
+        raise UserError("forget needs an ID (D12, M40) or --session SID")
+    with _open(a, create=False) as s:
+        items, turns = [], []
+        for ref in a.ids:
+            try:
+                kind, n = parse_id(ref)
+            except ValueError as e:
+                raise UserError(str(e))
+            if kind == "turn":
+                if not s.one("SELECT 1 FROM turns WHERE id=?", (n,)):
+                    raise UserError(f"no turn {ref.upper()}")
+                turns.append(n)
+            else:
+                if not memory.get_item(s, n):
+                    raise UserError(f"no item {ref.upper()}")
+                items.append((ref.upper(), n))
+        if a.session:
+            turns += [t for t in memory.turns_of_session(s, a.session) if t not in turns]
+        if a.dry_run:
+            if turns:
+                print(f"would delete {len(turns)} turn(s): " + " ".join(f"M{t}" for t in turns[:40])
+                      + (" …" if len(turns) > 40 else ""))
+            for ref, _ in items:
+                print(f"would forget {ref} (text redacted, tombstone kept)")
+            return
+        if turns:
+            n = memory.delete_turns(s, turns)
+            print(f"{n} turn(s) deleted: " + " ".join(f"M{t}" for t in turns[:40]) + (" …" if len(turns) > 40 else ""))
+        for ref, n in items:
+            memory.forget(s, n)
+            print(f"{ref} forgotten (text redacted, tombstone kept)")
 
 
 def cmd_search(a):
@@ -291,17 +319,15 @@ def cmd_gc(a):
     with _open(a, create=False) as s:
         n = 0
         if a.turns_older_than:
-            import datetime as _dt
-            cut = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=a.turns_older_than)).strftime(
-                "%Y-%m-%dT%H:%M:%SZ")
-            with s.tx():
-                ids = [r[0] for r in s.q("SELECT id FROM turns WHERE created_at < ?", (cut,))]
-                for i in range(0, len(ids), 500):
-                    chunk = ids[i:i + 500]
-                    ph = ",".join("?" * len(chunk))
-                    s.x(f"DELETE FROM fts_turns WHERE rowid IN ({ph})", chunk)
-                    s.x(f"DELETE FROM turns WHERE id IN ({ph})", chunk)
-                n = len(ids)
+            cut = cutoff_iso(a.turns_older_than)
+            ids = memory.turns_older_than(s, cut)
+            if a.dry_run:
+                print(f"would remove {len(ids)} turn(s) captured before {cut} (cutoff); nothing deleted")
+                return
+            n = memory.delete_turns(s, ids)
+        elif a.dry_run:
+            print("nothing to preview: gc without --turns-older-than only optimizes the store")
+            return
         if s.fts:
             for t in db.FTS_TABLES:
                 s.x(f"INSERT INTO {t}({t}) VALUES('optimize')")
@@ -390,8 +416,9 @@ def build_parser() -> argparse.ArgumentParser:
         sp = add(name, fn, h)
         sp.add_argument("ids", nargs="+", metavar="ID")
         sp.add_argument("--note")
-    sp = add("forget", cmd_forget, "redact an item for good (e.g. a leaked secret)")
-    sp.add_argument("id")
+    sp = add("forget", cmd_forget, "redact items for good (tombstone kept); delete captured turns (M ids, or --session SID for all of a session's)")
+    sp.add_argument("ids", nargs="*", metavar="ID")
+    sp.add_argument("--dry-run", action="store_true", help="show what would go; change nothing")
 
     # code
     sp = add("map", cmd_map, "PageRank code skeleton within a token budget", aliases=["repo-map"])
@@ -424,7 +451,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("gc", cmd_gc, "optimize the store; optionally prune old turns", aliases=["prune", "repair"])
     sp.add_argument("--turns-older-than", type=int, metavar="DAYS")
     sp.add_argument("--keep-days", type=int, dest="turns_older_than", help=argparse.SUPPRESS)
-    sp.add_argument("--dry-run", action="store_true", help=argparse.SUPPRESS)
+    sp.add_argument("--dry-run", action="store_true", help="print the cutoff and count; delete nothing")
     sp = add("hook", cmd_hook, "internal: run a Claude Code hook (reads JSON on stdin)")
     sp.add_argument("event")
     sp = add("migrate", cmd_migrate, "upgrade v0 stores to 1.0")

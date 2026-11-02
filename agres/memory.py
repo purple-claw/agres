@@ -232,6 +232,37 @@ def add_turn(store, session_id: Optional[str], role: str, text: str, prompt_id: 
     return tid
 
 
+def turns_older_than(store, cutoff_iso: str) -> list[int]:
+    return [r[0] for r in store.q("SELECT id FROM turns WHERE created_at < ? ORDER BY id", (cutoff_iso,))]
+
+
+def turns_of_session(store, sid: str) -> list[int]:
+    return [r[0] for r in store.q("SELECT id FROM turns WHERE session_id=? ORDER BY id", (sid,))]
+
+
+def delete_turns(store, ids: Iterable[int]) -> int:
+    """Hard-delete captured turns and their search rows. The one exception to "never hard-delete":
+    turns are raw capture, and removing them (forget / gc / retention) is the point."""
+    ids = list(ids)
+    n = 0
+    with store.tx():
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            ph = ",".join("?" * len(chunk))
+            store.x(f"DELETE FROM fts_turns WHERE rowid IN ({ph})", chunk)
+            n += store.x(f"DELETE FROM turns WHERE id IN ({ph})", chunk).rowcount
+    return n
+
+
+def search_turn_ids(store, word: str) -> list[int]:
+    """Turn ids whose search row mentions `word` (FTS or LIKE fallback)."""
+    if store.fts:
+        rows = store.q("SELECT rowid FROM fts_turns WHERE fts_turns MATCH ? ORDER BY rowid", (fts_query([word]),))
+    else:
+        rows = store.q("SELECT rowid FROM fts_turns WHERE body LIKE ? ORDER BY rowid", (f"%{word}%",))
+    return [r[0] for r in rows]
+
+
 # ------------------------------------------------------------------ sessions
 def touch_session(store, sid: str, agent: Optional[str] = None, cwd: Optional[str] = None,
                   title: Optional[str] = None, prompt: bool = False) -> None:
