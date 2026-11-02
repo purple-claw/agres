@@ -44,6 +44,18 @@ Full text for what must hold, one line per everything else, `agres show <ID>` fo
 
 ## Install
 
+As a Claude Code plugin (1.1+):
+
+```bash
+claude plugin marketplace add ~/Dev/agres    # or: /plugin install agres --marketplace purple-claw/agres
+claude plugin install agres@agres
+agres install --plugin --dry-run             # moves 1.0 settings hooks / skill links out of the way
+```
+
+Origami: big Bash output is folded out of the context window (head + error lines + tail + `agres unfold F12`); compaction spans and subagent results become folds too. Details: `skill/agres/REFERENCE.md#origami`.
+
+Without the plugin:
+
 ```bash
 git clone https://github.com/purple-claw/agres ~/Dev/agres
 ~/Dev/agres/bin/agres install --dry-run   # shows every change first
