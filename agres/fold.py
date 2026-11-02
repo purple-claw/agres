@@ -38,12 +38,15 @@ CREATE INDEX IF NOT EXISTS folds_created ON folds(created_at);
 SALIENT = re.compile(r"\b(error|errors|fail|failed|failure|FAILED|FAIL|exception|traceback|warning|panic|"
                      r"fatal|segfault|assert(ion)?|denied|undefined|undeclared|not found)\b", re.I)
 SALIENT_MAX = 30
-SALIENT_CHARS = 300
+LINE_CHARS = 300        # any previewed line is cut to this (one minified-JSON line must not flood the window)
+PREVIEW_CHARS = 6000    # hard cap on a whole preview
 UNFOLD_LINES = 200
 UNFOLD_CHARS = 16_000
 INDEX_BODY_CHARS = 200_000
 MIN_FOLD_CHARS = 1000  # matches the fast path in __main__.py
-AGRES_CMD = re.compile(r"(^|[\s;&|(/])agres(\s|$)")
+# `agres` in command position (start, after ; & | ( ` ' " $( or a path), or `python -m agres`. A path or an
+# argument that merely contains "agres" (cd ~/Dev/agres, grep agres x) is not a match.
+AGRES_CMD = re.compile(r"""(?:^|[;&|(`'"]|\$\()\s*(?:[\w.~\-]*/)*agres(?=$|[\s"'`);|&])|-m\s+agres\b""")
 
 
 # --------------------------------------------------------------------- store
@@ -82,25 +85,55 @@ def recent(store, limit: int = 8) -> list:
 
 
 # ------------------------------------------------------------------- preview
+def split_lines(text: str) -> list[str]:
+    """Lines as a shell counts them: split on \\n only (\\r and form feeds stay inside a line)."""
+    rows = text.split("\n")
+    if rows and rows[-1] == "" and text.endswith("\n"):
+        rows.pop()
+    return rows
+
+
+def _cut(line: str, limit: int = LINE_CHARS) -> str:
+    return line if len(line) <= limit else line[:limit] + f" …[+{len(line) - limit} chars]"
+
+
 def preview(text: str, head: int = 40, tail: int = 20) -> str:
-    """Top lines, salient lines from the middle, bottom lines — all verbatim, with line numbers for the
-    middle so `unfold --lines` can jump straight there."""
-    lines = text.splitlines()
-    if len(lines) <= head + tail:
-        return text
-    top, mid, bottom = lines[:head], lines[head:len(lines) - tail], lines[len(lines) - tail:]
-    sal = []
-    for i, line in enumerate(mid, start=head + 1):
-        if SALIENT.search(line):
-            sal.append(f"{i}: {truncate(line, SALIENT_CHARS)}")
-            if len(sal) >= SALIENT_MAX:
+    """Top lines, salient lines from the middle, bottom lines — verbatim but each cut to LINE_CHARS, the
+    whole capped at PREVIEW_CHARS — with line numbers on the salient lines for `unfold --lines`."""
+    lines = split_lines(text)
+    n = len(lines)
+    top_idx = list(range(min(head, n)))
+    bot_idx = list(range(max(len(top_idx), n - tail), n))
+    out_top, used = [], 0
+    for i in top_idx:  # top gets up to ~45% of the budget
+        line = _cut(lines[i])
+        if used + len(line) + 1 > PREVIEW_CHARS * 0.45 and out_top:
+            break
+        out_top.append(line)
+        used += len(line) + 1
+    shown_top = len(out_top)
+    out_bot, bused = [], 0
+    for i in reversed(bot_idx):  # bottom up to ~25%
+        line = _cut(lines[i])
+        if bused + len(line) + 1 > PREVIEW_CHARS * 0.25 and out_bot:
+            break
+        out_bot.insert(0, line)
+        bused += len(line) + 1
+    first_bot = n - len(out_bot)
+    sal, sused = [], 0
+    for i in range(shown_top, first_bot):
+        if SALIENT.search(lines[i][:2000]):
+            line = f"{i + 1}: {_cut(lines[i])}"
+            if len(sal) >= SALIENT_MAX or sused + len(line) + 1 > PREVIEW_CHARS * 0.3:
                 break
-    out = top + [f"… [{len(mid)} lines folded"
-                 + (f"; {len(sal)} salient line(s) kept below]" if sal else "]")]
-    out += sal
+            sal.append(line)
+            sused += len(line) + 1
+    hidden = first_bot - shown_top
+    mid = [f"… [{hidden} line(s) folded" + (f"; {len(sal)} salient line(s) kept below]" if sal else "]")] \
+        if hidden > 0 else []
     if sal:
-        out.append("…")
-    return "\n".join(out + bottom)
+        mid += sal + ["…"]
+    return "\n".join(out_top + mid + out_bot)
 
 
 def line_count(text: str) -> int:
@@ -201,37 +234,50 @@ def full_text(store, f) -> str:
     turns = meta.get("turns")
     if turns:
         lo, hi = min(turns), max(turns)
-        for t in store.q("SELECT id, role, text FROM turns WHERE id BETWEEN ? AND ? "
-                         + ("AND session_id=? " if meta.get("session") else "") + "ORDER BY id",
-                         (lo, hi, meta["session"]) if meta.get("session") else (lo, hi)):
+        rows = store.q("SELECT id, role, text FROM turns WHERE id BETWEEN ? AND ? "
+                       + ("AND session_id=? " if meta.get("session") else "") + "ORDER BY id",
+                       (lo, hi, meta["session"]) if meta.get("session") else (lo, hi))
+        for t in rows:
             parts.append(f"--- M{t['id']} {t['role']}\n{t['text']}")
-        if len(parts) == (1 if f["body"] is not None else 0):
+        want = int(meta.get("count") or (hi - lo + 1))
+        if not rows:
             parts.append(f"(turns M{lo}–M{hi} are no longer stored)")
+        elif len(rows) < want:
+            parts.append(f"({len(rows)} of {want} turns still stored; the rest were forgotten or pruned)")
     return "\n".join(parts)
 
 
-def unfold(store, fid: int, lines: Optional[tuple[int, int]] = None, grep: Optional[str] = None,
-           context: int = 0, all_: bool = False) -> str:
+REGEX_LINE_CHARS = 4000  # --regex only looks at this much of each line (bounds pathological patterns)
+
+
+def unfold(store, fid: int, lines: Optional[tuple[int, int]] = None, grep=None, context: int = 0,
+           all_: bool = False, regex: Optional[str] = None) -> str:
+    """`grep`: one literal or a list of literals (any matches), case-insensitive — safe on any input.
+    `regex`: opt-in Python regex, matched against the first REGEX_LINE_CHARS of each line."""
     f = get(store, fid)
     if not f:
         raise ValueError(f"no fold F{fid}")
     text = full_text(store, f)
-    if all_ and not lines and not grep:
+    if all_ and not lines and not grep and not regex:
         return text
-    rows = text.splitlines()
+    rows = split_lines(text)
     total = len(rows)
-    if grep:
+    if grep or regex:
+        needles = [g.lower() for g in ([grep] if isinstance(grep, str) else list(grep or [])) if g]
         try:
-            pat = re.compile(grep, re.I)
-        except re.error:
-            pat = re.compile(re.escape(grep), re.I)
+            pat = re.compile(regex, re.I) if regex else None
+        except re.error as e:
+            raise ValueError(f"bad --regex {regex!r}: {e}")
         keep: set[int] = set()
+        context = max(0, min(int(context or 0), 1000))
         for i, line in enumerate(rows):
-            if pat.search(line):
+            low = line.lower()
+            if any(n in low for n in needles) or (pat is not None and pat.search(line[:REGEX_LINE_CHARS])):
                 keep.update(range(max(0, i - context), min(total, i + context + 1)))
         out = [f"{i + 1}: {rows[i]}" for i in sorted(keep)]
+        what = regex if regex else (needles[0] if len(needles) == 1 else needles)
         if not out:
-            return f"F{fid}: no line matches {grep!r} ({total} lines)"
+            return f"F{fid}: no line matches {what!r} ({total} lines)"
         return _bounded(out, all_, f"F{fid}: {len(out)} matching line(s) of {total}")
     lo, hi = lines if lines else (1, total)
     lo, hi = max(1, lo), min(total, hi)
@@ -251,6 +297,9 @@ def _bounded(rows: list[str], all_: bool, footer: Optional[str]) -> str:
         out, used = [], 0
         for r in rows[:UNFOLD_LINES]:
             if used + len(r) + 1 > UNFOLD_CHARS:
+                if not out:  # never return nothing: show the first line, cut
+                    out.append(r[:UNFOLD_CHARS] + f" …[line cut at {UNFOLD_CHARS} chars of {len(r)}; "
+                                                  "use --all]")
                 break
             out.append(r)
             used += len(r) + 1
@@ -269,6 +318,9 @@ def parse_range(spec: str) -> tuple[int, int]:
     return (a, b) if a <= b else (b, a)
 
 
+FOLD_TAG = {"agent": "[subagent] ", "span": "[compact] "}
+
+
 def format_line(f) -> str:
     meta = json.loads(f["meta"]) if f["meta"] else {}
     if f["kind"] == "tool":
@@ -277,4 +329,5 @@ def format_line(f) -> str:
         extra = f"M{min(meta['turns'])}–M{max(meta['turns'])}"
     else:
         extra = f["kind"]
-    return f"F{f['id']} [{extra}] {truncate(f['title'] if f['kind'] == 'tool' else f['summary'] or f['title'], 110)}"
+    gist = f["title"] if f["kind"] == "tool" else f["summary"] or f["title"]
+    return f"F{f['id']} [{extra}] {FOLD_TAG.get(f['kind'], '')}{truncate(gist, 110)}"

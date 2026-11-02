@@ -474,9 +474,18 @@ def cli(a) -> int:
     if a.cmd == "uninstall":
         steps = uninstall(dry_run=a.dry_run)
         print("\n".join(steps) if steps else "nothing to undo")
+        if steps and plugin_enabled():
+            print(f"note: plugin {plugin_enabled()} is still enabled, so its hooks now run next to the restored "
+                  "settings hooks (double wiring). `claude plugin disable agres` or `agres install --plugin`.")
         return 0
+    want_plugin = bool(getattr(a, "plugin", False))
+    if want_plugin and not plugin_enabled() and not getattr(a, "force", False):
+        print("agres install --plugin: the agres plugin is not enabled in ~/.claude/settings.json, so removing "
+              "the settings hooks would leave no hooks at all. First: `claude plugin marketplace add "
+              f"{REPO}` and `claude plugin install agres@agres` (or pass --force).")
+        return 1
     try:
-        plan = build_plan(plugin=bool(getattr(a, "plugin", False)))
+        plan = build_plan(plugin=want_plugin)
     except ValueError as e:
         print(f"agres install: {e}")
         return 1

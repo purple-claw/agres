@@ -45,7 +45,8 @@ class PluginOptionTest(TempHome):
 
     def test_coerce_new_keys(self):
         self.assertEqual(config.coerce("turn_retention_days", "14"), 14)
-        self.assertEqual(config.coerce("redact_patterns", r"ACME-\d{6}, x[0-9]+"), [r"ACME-\d{6}", "x[0-9]+"])
+        self.assertEqual(config.coerce("redact_patterns", r"ACME-\d{1,6}"), [r"ACME-\d{1,6}"])  # commas kept
+        self.assertEqual(config.coerce("redact_patterns", r'["ACME-\\d{6}", "x[0-9]+"]'), [r"ACME-\d{6}", "x[0-9]+"])
         with self.assertRaises(ValueError):
             config.coerce("redact_patterns", "([unclosed")
         with self.assertRaises(ValueError):

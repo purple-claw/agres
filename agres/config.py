@@ -59,6 +59,8 @@ def _write(path: str, data: dict) -> None:
     os.replace(tmp, path)
 
 
+MAX_DAYS = 36500
+
 PLUGIN_OPTIONS = ("capture", "turn_retention_days", "budget_chars", "fold", "fold_chars")
 
 
@@ -107,20 +109,23 @@ def coerce(key: str, raw: str) -> Any:
             return False
         raise ValueError(f"{key} expects on/off")
     if isinstance(default, int):
-        val = int(raw)
+        val = int(float(raw))  # userConfig numbers may arrive as "30.0"
         if val < 0:
             raise ValueError(f"{key} must be ≥ 0")
-        return val
+        return min(val, MAX_DAYS) if key == "turn_retention_days" else val
     if isinstance(default, list):
-        vals = [x.strip() for x in raw.split(",") if x.strip()]
-        if key == "redact_patterns":
+        if key == "redact_patterns":  # regexes contain commas ({1,3}): a JSON list, or one pattern
             import re
+            vals = json.loads(raw) if raw.lstrip().startswith("[") else [raw]
+            if not isinstance(vals, list) or not all(isinstance(v, str) for v in vals):
+                raise ValueError("redact_patterns expects a regex or a JSON list of regexes")
             for v in vals:
                 try:
                     re.compile(v)
                 except re.error as e:
                     raise ValueError(f"redact_patterns: {v!r} is not a valid regex ({e})")
-        return vals
+            return vals
+        return [x.strip() for x in raw.split(",") if x.strip()]
     if key == "capture" and raw not in ("all", "prompts", "none"):
         raise ValueError("capture expects all | prompts | none")
     return raw

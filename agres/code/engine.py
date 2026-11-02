@@ -51,12 +51,16 @@ def reconcile(store: Store, timeout: float = 2.0) -> int:
     if not store.one("SELECT 1 FROM files LIMIT 1"):
         return 0
     try:
-        out = subprocess.run(["git", "-C", store.root, "status", "--porcelain=v1", "-z", "-uall"],
+        top = subprocess.run(["git", "-C", store.root, "rev-parse", "--show-toplevel"], capture_output=True,
+                             text=True, timeout=timeout)
+        # paths in `git status` are relative to the repo top, which may be above the store root (monorepo)
+        out = subprocess.run(["git", "-C", store.root, "status", "--porcelain=v1", "-z", "-unormal", "--", "."],
                              capture_output=True, timeout=timeout)
     except (OSError, subprocess.SubprocessError):
         return 0
-    if out.returncode != 0:
+    if out.returncode != 0 or top.returncode != 0:
         return 0
+    base = top.stdout.strip() or store.root
     paths: list[str] = []
     fields = out.stdout.decode("utf-8", "replace").split("\0")
     i = 0
@@ -70,7 +74,18 @@ def reconcile(store: Store, timeout: float = 2.0) -> int:
             if i < len(fields) and fields[i]:
                 paths.append(fields[i])
             i += 1
-    n = touch(store, [os.path.join(store.root, p) for p in paths[:RECONCILE_MAX]])
+    full = [os.path.join(base, p) for p in paths]
+    full = [p for p in full if os.path.realpath(p).startswith(os.path.realpath(store.root) + os.sep)]
+    expanded: list[str] = []
+    for p in full:  # -unormal lists an untracked dir once ("new/"): walk it, bounded
+        if os.path.isdir(p):
+            for d, _, fs in os.walk(p):
+                expanded += [os.path.join(d, f) for f in fs]
+                if len(expanded) > RECONCILE_MAX:
+                    break
+        else:
+            expanded.append(p)
+    n = touch(store, expanded[:RECONCILE_MAX])
     store.set_meta("last_reconcile", now_iso())
     return n
 

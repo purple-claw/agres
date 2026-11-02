@@ -174,16 +174,17 @@ def _span_fold(s: db.Store, sid: str, summary: str, trigger: Optional[str]) -> O
     if not sid:
         return None
     from . import fold
-    key = f"span:{sid}"
     with s.tx():
-        start = int(s.get_meta(key) or 0)
+        # start after the last span already folded for this session (survives session end + resume)
+        prev = s.one("SELECT MAX(CAST(json_extract(meta, '$.turns[1]') AS INTEGER)) FROM folds "
+                     "WHERE kind='span' AND session_id=?", (sid,))[0]
+        start = int(prev or 0)
         ids = [r[0] for r in s.q("SELECT id FROM turns WHERE session_id=? AND id>? ORDER BY id", (sid, start))]
         if not ids:
             return None
         fid = fold.add_fold(s, "span", f"compaction ({trigger or 'auto'}) of M{ids[0]}–M{ids[-1]}", summary,
                             meta={"turns": [ids[0], ids[-1]], "session": sid, "count": len(ids)},
                             session_id=sid, source="compact")
-        s.set_meta(key, str(ids[-1]))
     return fid
 
 
@@ -214,11 +215,11 @@ def on_agent_fold(c: _Ctx) -> None:
 
 def _retention(s: db.Store, cfg: dict) -> int:
     """Delete raw capture (turns, tool/agent folds) older than `turn_retention_days`, at most once a day."""
-    days = int(cfg.get("turn_retention_days") or 0)
+    days = min(int(cfg.get("turn_retention_days") or 0), config.MAX_DAYS)
     if days <= 0:
         return 0
     last = s.get_meta("last_retention")
-    if last and last > cutoff_iso(1):
+    if last and cutoff_iso(1) < last <= now_iso():  # a future stamp (clock skew) doesn't block forever
         return 0
     cut = cutoff_iso(days)
     n = memory.delete_turns(s, memory.turns_older_than(s, cut))
@@ -233,11 +234,10 @@ def on_session_end(c: _Ctx) -> None:
     s = c.store(create_ok=False)
     if s is None:
         return None
-    _retention(s, c.cfg)
     memory.end_session(s, c.sid, c.p.get("reason"))
-    meta_keys = (f"files:{c.sid}", f"guard:{c.sid}", f"span:{c.sid}")
+    meta_keys = (f"files:{c.sid}", f"guard:{c.sid}")
     files = json.loads(s.get_meta(meta_keys[0]) or "[]")
-    s.x("DELETE FROM meta WHERE key IN (?,?,?)", meta_keys)
+    s.x("DELETE FROM meta WHERE key IN (?,?)", meta_keys)
     if s.one("SELECT 1 FROM items WHERE kind='handoff' AND session_id=?", (c.sid,)):
         return None
     prompts = s.q("SELECT text FROM turns WHERE session_id=? AND role='user' ORDER BY id", (c.sid,))
@@ -253,6 +253,17 @@ def on_session_end(c: _Ctx) -> None:
         parts.append("Recorded: " + ", ".join(recorded[:12]) + ".")
     memory.add_handoff(s, " ".join(parts), source="auto", session_id=c.sid)
     return None
+
+
+def _session_end_retention(c: _Ctx) -> None:
+    """Runs after the session bookkeeping; a lock or bad value only skips the prune."""
+    s = c._store
+    if s is None:
+        return
+    try:
+        _retention(s, c.cfg)
+    except Exception:
+        _log(c.root, "session-end retention", traceback.format_exc())
 
 
 HANDLERS = {"session-start": on_session_start, "prompt": on_prompt, "stop": on_stop, "edit": on_edit,
@@ -392,6 +403,8 @@ def main(event: str, stdin: Optional[TextIO] = None, stdout: Optional[TextIO] = 
             return 0
         ctx = _Ctx(name, payload)
         text = handler(ctx)
+        if name == "session-end":
+            _session_end_retention(ctx)
         if text and name == "fold":
             stdout.write(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse",
                                                             "updatedToolOutput": text}}))

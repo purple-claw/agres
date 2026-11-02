@@ -175,25 +175,38 @@ def cmd_forget(a):
                     raise UserError(f"no item {ref.upper()}")
                 items.append((ref.upper(), n))
         if a.session:
-            turns += [t for t in memory.turns_of_session(s, a.session) if t not in turns]
+            st = memory.turns_of_session(s, a.session)
+            sf = [r[0] for r in s.q("SELECT id FROM folds WHERE session_id=? AND kind IN ('tool','agent') "
+                                    "ORDER BY id", (a.session,))]
+            if not st and not sf:
+                raise UserError(f"nothing captured for session {a.session!r}")
+            turns += [t for t in st if t not in turns]
+            folds += [f for f in sf if f not in folds]
+        verb = "would delete" if a.dry_run else "deleted"
         if a.dry_run:
             if turns:
                 print(f"would delete {len(turns)} turn(s): " + " ".join(f"M{t}" for t in turns[:40])
                       + (" …" if len(turns) > 40 else ""))
+            if folds:
+                print(f"would delete {len(folds)} fold(s): " + " ".join(f"F{n}" for n in folds[:40]))
             for ref, _ in items:
                 print(f"would forget {ref} (text redacted, tombstone kept)")
-            for n in folds:
-                print(f"would delete fold F{n} (the turns it points at stay)")
             return
-        for n in folds:
-            fold.delete(s, n)
-            print(f"F{n} deleted (the turns it points at stay)")
+        with s.tx():  # all or nothing
+            for n in folds:
+                fold.delete(s, n)
+            n_turns = memory.delete_turns(s, turns) if turns else 0
+            for _, n in items:
+                memory.forget(s, n)
+        if folds:
+            print(f"{len(folds)} fold(s) {verb}: " + " ".join(f"F{n}" for n in folds[:40])
+                  + " (turns they point at stay unless listed)")
         if turns:
-            n = memory.delete_turns(s, turns)
-            print(f"{n} turn(s) deleted: " + " ".join(f"M{t}" for t in turns[:40]) + (" …" if len(turns) > 40 else ""))
-        for ref, n in items:
-            memory.forget(s, n)
+            print(f"{n_turns} turn(s) {verb}: " + " ".join(f"M{t}" for t in turns[:40]) + (" …" if len(turns) > 40 else ""))
+        for ref, _ in items:
             print(f"{ref} forgotten (text redacted, tombstone kept)")
+        if a.session:
+            print("span/compaction summaries and handoffs of that session are kept; `agres forget H<id>` redacts one")
 
 
 def cmd_search(a):
@@ -221,7 +234,7 @@ def cmd_unfold(a):
         raise UserError(str(e))
     with _open(a, create=False) as s:
         try:
-            print(fold.unfold(s, n, lines=rng, grep=a.grep, context=a.context, all_=a.all_text))
+            print(fold.unfold(s, n, lines=rng, grep=a.grep, regex=a.regex, context=a.context, all_=a.all_text))
         except ValueError as e:
             raise UserError(str(e))
 
@@ -259,7 +272,7 @@ def cmd_fold(a):
 def cmd_show(a):
     from . import search
     if _is_fold_ref(a.id):
-        a.query, a.lines, a.grep, a.context, a.all_text = [a.id], None, None, 0, False
+        a.query, a.lines, a.grep, a.regex, a.context, a.all_text = [a.id], None, None, None, 0, False
         return cmd_unfold(a)
     with _open(a) as s:
         try:
@@ -381,6 +394,8 @@ def cmd_status(a):
 def cmd_gc(a):
     with _open(a, create=False) as s:
         n = 0
+        if a.turns_older_than is not None and a.turns_older_than <= 0:
+            raise UserError("--turns-older-than needs a number of days > 0")
         if a.turns_older_than:
             cut = cutoff_iso(a.turns_older_than)
             ids = memory.turns_older_than(s, cut)
@@ -533,6 +548,7 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "install":
             sp.add_argument("--plugin", action="store_true",
                             help="the agres Claude Code plugin owns hooks + skill: remove the settings wiring")
+            sp.add_argument("--force", action="store_true", help=argparse.SUPPRESS)
 
     # compatibility (zeus, old habits)
     sp = add("start", cmd_start, argparse.SUPPRESS)
@@ -556,7 +572,9 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--budget", type=int, help=argparse.SUPPRESS)
         sp.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
         sp.add_argument("--lines", metavar="A-B", help="only these lines")
-        sp.add_argument("--grep", metavar="PAT", help="only lines matching PAT (regex, case-insensitive)")
+        sp.add_argument("--grep", metavar="TEXT", action="append",
+                        help="only lines containing TEXT (literal, case-insensitive; repeat for OR)")
+        sp.add_argument("--regex", metavar="RE", help="only lines matching a Python regex (opt-in)")
         sp.add_argument("--context", type=int, default=0, metavar="N", help="lines around each --grep hit")
         sp.add_argument("--all", dest="all_text", action="store_true", help="no size cap")
         sp.set_defaults(kind=None, all=False, no_code=False)
@@ -569,7 +587,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[list[str]] = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if argv and argv[0] == "fold" and any(x.startswith(("--target", "--budget", "--keep")) for x in argv):
+    v0_flags = ("--target", "--budget", "--keep", "--keep-recent")
+    if argv and argv[0] == "fold" and any(x in v0_flags or x.split("=", 1)[0] in v0_flags for x in argv[1:]):
         print("agres fold: v0 window folding (--target/--budget) is gone. Origami 1.1 folds big tool output "
               "automatically; fold a span yourself with `agres fold \"<summary>\" --turns M40-M88`.")
         return 0
