@@ -11,7 +11,7 @@ import re
 import sqlite3
 from typing import Iterable, Optional
 
-from .memory import KINDS, LIVE, fmt_id, live_clause, parse_id
+from .memory import KINDS, LIVE, fmt_id, live_clause, parse_id, source_tag
 from .util import ago, terms, truncate
 
 WEIGHT = {"item": 1.0, "fold": 0.7, "turn": 0.6, "code": 0.5}
@@ -86,7 +86,7 @@ def search(store, query: str, kinds: Optional[Iterable[str]] = None, include_tur
         lists.append(("item", [{
             "id": fmt_id(r["kind"], r["id"]), "kind": r["kind"], "status": r["status"],
             "priority": r["priority"], "title": r["title"], "snippet": truncate(r["text"], SNIPPET),
-            "created_at": r["created_at"]} for r in rows]))
+            "source": r["source"], "created_at": r["created_at"]} for r in rows]))
 
     if include_turns and (not kinds or "turn" in kinds):
         rows = _ranked(store, "fts_turns", "turns t ON t.id=fts_turns.rowid", "", [], words, limit * 2)
@@ -146,7 +146,8 @@ def format_hits(hits: list[dict]) -> str:
             mark = {"rejected": " ✗ rejected", "superseded": " (superseded)", "retracted": " (retracted)",
                     "done": " ✓ done", "fixed": " ✓ fixed", "dropped": " (dropped)", "retired": " (retired)"}
             flag = mark.get(h["status"], "") + (" !critical" if h.get("priority") else "")
-            lines.append(f"{h['id']}{flag} · {ago(h['created_at'])} · {h['snippet']}")
+            tag = source_tag(h.get("source"))
+            lines.append(f"{h['id']}{flag} · {ago(h['created_at'])} · " + (f"{tag} " if tag else "") + h["snippet"])
     return "\n".join(lines)
 
 
@@ -160,7 +161,7 @@ def show(store, ref: str, around: int = 0) -> str:
         raise ValueError(f"no item {ref}")
     iid = fmt_id(it["kind"], it["id"])
     head = [iid, it["kind"], it["status"] + (" · critical" if it["priority"] else ""),
-            f"{it['created_at'][:10]} ({ago(it['created_at'])})", f"source {it['source']}"]
+            f"{it['created_at'][:10]} ({ago(it['created_at'])})", f"source {it['source']}" + (f" {source_tag(it['source'])}" if source_tag(it["source"]) else "")]
     if it["origin"]:
         head.append(f"origin {it['origin']}")
     lines = [" · ".join(head), "", it["text"]]

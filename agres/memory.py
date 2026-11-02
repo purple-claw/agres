@@ -45,6 +45,17 @@ TITLE_CHARS = 80
 SESSION_WINDOW_H = 12
 
 
+# ---------------------------------------------------------------- provenance
+def source_tag(source: Optional[str]) -> str:
+    """Where a row came from, set by the code path that wrote it — never by its text. Agent CLI writes
+    carry no tag; everything else is marked so the reader can weigh it."""
+    if not source or source in ("agent", "checkpoint"):
+        return ""
+    if source.startswith("migrate"):
+        return "[imported]"
+    return f"[{source}]"
+
+
 # ---------------------------------------------------------------- ids/titles
 def fmt_id(kind: str, iid: int) -> str:
     return f"{PREFIX[kind]}{iid}"
