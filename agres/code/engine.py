@@ -9,6 +9,8 @@
 """
 from __future__ import annotations
 
+import os
+import subprocess
 import time
 from typing import Iterable, Optional
 
@@ -37,6 +39,40 @@ def touch(store: Store, paths: Iterable[str]) -> int:
     meta `resolve_dirty` becomes 1 so the next `ensure_resolved` rebuilds the edges.
     """
     return Indexer(store).touch(paths)
+
+
+RECONCILE_MAX = 200
+
+
+def reconcile(store: Store, timeout: float = 2.0) -> int:
+    """Catch edits no hook reported (shell `sed -i`, generators, `git mv`): re-touch every path git sees
+    as modified, added, deleted, renamed or untracked. Unchanged files cost a stat (touch compares
+    size/mtime/hash). No-op without a code index or without git. Returns files re-parsed or removed."""
+    if not store.one("SELECT 1 FROM files LIMIT 1"):
+        return 0
+    try:
+        out = subprocess.run(["git", "-C", store.root, "status", "--porcelain=v1", "-z", "-uall"],
+                             capture_output=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return 0
+    if out.returncode != 0:
+        return 0
+    paths: list[str] = []
+    fields = out.stdout.decode("utf-8", "replace").split("\0")
+    i = 0
+    while i < len(fields):
+        f = fields[i]
+        i += 1
+        if len(f) < 4:
+            continue
+        paths.append(f[3:])
+        if f[0] in "RC" or f[1] in "RC":  # rename/copy: next field is the old path
+            if i < len(fields) and fields[i]:
+                paths.append(fields[i])
+            i += 1
+    n = touch(store, [os.path.join(store.root, p) for p in paths[:RECONCILE_MAX]])
+    store.set_meta("last_reconcile", now_iso())
+    return n
 
 
 def ensure_resolved(store: Store) -> bool:

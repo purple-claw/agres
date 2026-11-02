@@ -134,12 +134,18 @@ def on_stop(c: _Ctx) -> None:
 
 def on_edit(c: _Ctx) -> None:
     files = _edited_files(c.p, c.cwd)
-    if not files or c.root is None or config.is_off(c.root):
+    bash = c.p.get("tool_name") == "Bash"
+    if (not files and not bash) or c.root is None or config.is_off(c.root):
         return None
     s = c.store(create_ok=False)
     if s is None:
         return None
-    _touch_files(s, files)
+    if files:
+        _touch_files(s, files)
+    if bash:  # shell edits rarely report paths (bashEditDiff is undocumented): ask git what changed
+        _reconcile(s)
+    if not files:
+        return None
     if c.sid:
         key = f"files:{c.sid}"
         with s.tx():  # parallel async edit hooks: serialize the read-modify-write
@@ -342,6 +348,14 @@ def _touch_files(store: db.Store, files: list[str]) -> int:
     except ImportError:
         return 0
     return engine.touch(store, files)
+
+
+def _reconcile(store: db.Store) -> int:
+    try:
+        from .code import engine
+    except ImportError:
+        return 0
+    return engine.reconcile(store)
 
 
 def _log(root: Optional[str], event: str, err: str) -> None:
