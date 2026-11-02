@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Iterator, Optional
 
 from . import paths
-from .db import SCHEMA_VERSION
+from .db import SCHEMA_VERSION, V1_VERSIONS
 
 SOURCE = "migrate:v0"
 MANIFEST = "MANIFEST.json"
@@ -70,7 +70,7 @@ def kind_of(db_file: str) -> str:
             tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     except sqlite3.DatabaseError:
         return "bad"
-    if ver == SCHEMA_VERSION:
+    if ver in V1_VERSIONS:
         return "v1"
     if ver > SCHEMA_VERSION:
         return "newer"

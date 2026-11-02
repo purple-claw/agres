@@ -13,6 +13,11 @@ silent — any context there would make the conversation continue.
 | edit          | PostToolUse       | re-index edited files                                   |
 | post-compact  | PostCompact       | keep the compaction summary as the handoff              |
 | session-end   | SessionEnd        | close session, auto-handoff if the agent wrote none     |
+| fold          | PostToolUse (sync, Bash)  | origami: big output → preview + `agres unfold` stub |
+| agent-fold    | PostToolUse (async, Agent)| origami: keep a subagent's brief + result as a fold |
+
+`fold` is the one hook besides SessionStart/UserPromptSubmit that prints: its JSON replaces the tool
+result (`updatedToolOutput`, shaped like `tool_response`) before the model reads it.
 """
 from __future__ import annotations
 
@@ -30,7 +35,7 @@ from .util import cutoff_iso, now_iso, truncate
 ALIASES = {"SessionStart": "session-start", "UserPromptSubmit": "prompt", "Stop": "stop",
            "PostToolUse": "edit", "PostCompact": "post-compact", "SessionEnd": "session-end"}
 CLAUDE_NAME = {v: k for k, v in ALIASES.items()}
-SYNC_EVENTS = {"session-start", "prompt", "session-end"}
+SYNC_EVENTS = {"session-start", "prompt", "session-end", "fold"}
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 
 OFF_PHRASES = ("stop using agres", "disable agres", "agres off", "stop agres", "turn off agres", "turn agres off")
@@ -154,6 +159,50 @@ def on_post_compact(c: _Ctx) -> None:
     s = c.store(create_ok=False)
     if s is not None:
         memory.add_handoff(s, summary, source="compact", session_id=c.sid or None)
+        _span_fold(s, c.sid, summary, c.p.get("trigger"))
+    return None
+
+
+def _span_fold(s: db.Store, sid: str, summary: str, trigger: Optional[str]) -> Optional[int]:
+    """Origami deep fold: the turns compaction just summarized → one fold (summary + exact turn range)."""
+    if not sid:
+        return None
+    from . import fold
+    key = f"span:{sid}"
+    with s.tx():
+        start = int(s.get_meta(key) or 0)
+        ids = [r[0] for r in s.q("SELECT id FROM turns WHERE session_id=? AND id>? ORDER BY id", (sid, start))]
+        if not ids:
+            return None
+        fid = fold.add_fold(s, "span", f"compaction ({trigger or 'auto'}) of M{ids[0]}–M{ids[-1]}", summary,
+                            meta={"turns": [ids[0], ids[-1]], "session": sid, "count": len(ids)},
+                            session_id=sid, source="compact")
+        s.set_meta(key, str(ids[-1]))
+    return fid
+
+
+def on_fold(c: _Ctx) -> Optional[dict]:
+    if c.root is None or not c.cfg.get("fold") or config.is_off(c.root):
+        return None
+    resp = c.p.get("tool_response")
+    limit = int(c.cfg.get("fold_chars") or 12000)
+    if not isinstance(resp, dict) or not any(isinstance(resp.get(k), str) and len(resp[k]) > limit
+                                             for k in ("stdout", "stderr")):
+        return None  # fast path: no store opened for ordinary output
+    s = c.store(create_ok=True)
+    if s is None:
+        return None
+    from . import fold
+    return fold.tool_fold(s, c.p, c.cfg, session_id=c.sid or None)
+
+
+def on_agent_fold(c: _Ctx) -> None:
+    if c.root is None or not c.cfg.get("fold") or config.is_off(c.root):
+        return None
+    s = c.store(create_ok=False)
+    if s is not None:
+        from . import fold
+        fold.agent_fold(s, c.p, session_id=c.sid or None)
     return None
 
 
@@ -180,9 +229,9 @@ def on_session_end(c: _Ctx) -> None:
         return None
     _retention(s, c.cfg)
     memory.end_session(s, c.sid, c.p.get("reason"))
-    meta_keys = (f"files:{c.sid}", f"guard:{c.sid}")
+    meta_keys = (f"files:{c.sid}", f"guard:{c.sid}", f"span:{c.sid}")
     files = json.loads(s.get_meta(meta_keys[0]) or "[]")
-    s.x("DELETE FROM meta WHERE key IN (?,?)", meta_keys)
+    s.x("DELETE FROM meta WHERE key IN (?,?,?)", meta_keys)
     if s.one("SELECT 1 FROM items WHERE kind='handoff' AND session_id=?", (c.sid,)):
         return None
     prompts = s.q("SELECT text FROM turns WHERE session_id=? AND role='user' ORDER BY id", (c.sid,))
@@ -201,7 +250,8 @@ def on_session_end(c: _Ctx) -> None:
 
 
 HANDLERS = {"session-start": on_session_start, "prompt": on_prompt, "stop": on_stop, "edit": on_edit,
-            "post-compact": on_post_compact, "session-end": on_session_end}
+            "post-compact": on_post_compact, "session-end": on_session_end, "fold": on_fold,
+            "agent-fold": on_agent_fold}
 
 
 # ------------------------------------------------------------------- helpers
@@ -328,7 +378,10 @@ def main(event: str, stdin: Optional[TextIO] = None, stdout: Optional[TextIO] = 
             return 0
         ctx = _Ctx(name, payload)
         text = handler(ctx)
-        if text and name in ("session-start", "prompt"):
+        if text and name == "fold":
+            stdout.write(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse",
+                                                            "updatedToolOutput": text}}))
+        elif text and name in ("session-start", "prompt"):
             stdout.write(json.dumps({"hookSpecificOutput": {"hookEventName": CLAUDE_NAME[name],
                                                             "additionalContext": text}}))
     except Exception:

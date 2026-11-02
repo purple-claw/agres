@@ -12,13 +12,11 @@ import sys
 import uuid
 from typing import Optional
 
-from . import __version__, config, db, memory, paths
+from . import __version__, config, db, fold, memory, paths
 from .memory import fmt_id, parse_id
 from .util import cutoff_iso
 
 DEPRECATED = {
-    "fold": "context folding was removed in agres 1.0: Claude Code owns the context window. "
-            "Memory is re-injected after /compact; use `agres search` / `agres show` for exact recall.",
     "budget": "window budgets were removed in agres 1.0 (the pack is sized by `config budget_chars`).",
     "window": "the window manifest was removed in agres 1.0; see `agres status`.",
     "graph": "use `agres map --query ...` (code skeleton) or `agres search ...` instead of `graph`.",
@@ -54,9 +52,14 @@ def _session(args, s: db.Store) -> Optional[str]:
 
 
 def _item_id(ref: str) -> int:
-    kind, n = parse_id(ref)
+    try:
+        kind, n = parse_id(ref)
+    except ValueError as e:
+        raise UserError(str(e))
     if kind == "turn":
         raise UserError(f"{ref} is a conversation turn, not a memory item")
+    if kind == "fold":
+        raise UserError(f"{ref} is a fold: `agres unfold {ref}` reads it, `agres forget {ref}` removes it")
     return n
 
 
@@ -153,7 +156,7 @@ def cmd_forget(a):
     if not a.ids and not a.session:
         raise UserError("forget needs an ID (D12, M40) or --session SID")
     with _open(a, create=False) as s:
-        items, turns = [], []
+        items, turns, folds = [], [], []
         for ref in a.ids:
             try:
                 kind, n = parse_id(ref)
@@ -163,6 +166,10 @@ def cmd_forget(a):
                 if not s.one("SELECT 1 FROM turns WHERE id=?", (n,)):
                     raise UserError(f"no turn {ref.upper()}")
                 turns.append(n)
+            elif kind == "fold":
+                if not fold.get(s, n):
+                    raise UserError(f"no fold {ref.upper()}")
+                folds.append(n)
             else:
                 if not memory.get_item(s, n):
                     raise UserError(f"no item {ref.upper()}")
@@ -175,7 +182,12 @@ def cmd_forget(a):
                       + (" …" if len(turns) > 40 else ""))
             for ref, _ in items:
                 print(f"would forget {ref} (text redacted, tombstone kept)")
+            for n in folds:
+                print(f"would delete fold F{n} (the turns it points at stay)")
             return
+        for n in folds:
+            fold.delete(s, n)
+            print(f"F{n} deleted (the turns it points at stay)")
         if turns:
             n = memory.delete_turns(s, turns)
             print(f"{n} turn(s) deleted: " + " ".join(f"M{t}" for t in turns[:40]) + (" …" if len(turns) > 40 else ""))
@@ -196,8 +208,59 @@ def cmd_search(a):
         print(json.dumps(hits, indent=1) if a.json else search.format_hits(hits))
 
 
+def cmd_unfold(a):
+    """`agres unfold F12 [--lines A-B] [--grep PAT] [--context N] [--all]`; without an F id it is the v0
+    alias for search (`agres unfold --query ...`)."""
+    target = list(a.query or [])
+    if not (target and _is_fold_ref(target[0])):
+        return cmd_search(a)
+    _, n = parse_id(target[0])
+    try:
+        rng = fold.parse_range(a.lines) if a.lines else None
+    except ValueError as e:
+        raise UserError(str(e))
+    with _open(a, create=False) as s:
+        try:
+            print(fold.unfold(s, n, lines=rng, grep=a.grep, context=a.context, all_=a.all_text))
+        except ValueError as e:
+            raise UserError(str(e))
+
+
+def _is_fold_ref(ref: str) -> bool:
+    import re
+    return bool(re.fullmatch(r"\s*[Ff]\d+\s*", ref or ""))
+
+
+def cmd_fold(a):
+    """The agent's own deep fold: an anchored summary over a turn range or over text on stdin."""
+    summary = _text(a)
+    if not summary:
+        raise UserError("fold needs a summary (Goal / Done / Decisions / Artifacts / Open / Next)")
+    with _open(a) as s:
+        meta, body = {}, None
+        if a.turns:
+            try:
+                lo, hi = fold.parse_range(a.turns)
+            except ValueError as e:
+                raise UserError(str(e))
+            if not s.one("SELECT 1 FROM turns WHERE id BETWEEN ? AND ?", (lo, hi)):
+                raise UserError(f"no turns in M{lo}–M{hi}")
+            meta["turns"] = [lo, hi]
+        if a.stdin:
+            body = sys.stdin.read()
+        if not meta and body is None:
+            raise UserError("fold what? give --turns M40-M88 or pipe text with --stdin")
+        fid = fold.add_fold(s, "manual", a.title or memory.derive_title(summary), summary, body=body,
+                            meta=meta or None, session_id=_session(a, s), source="agent")
+        print(f"F{fid} folded" + (f" (M{meta['turns'][0]}–M{meta['turns'][1]})" if meta else "")
+              + f"; exact text: agres unfold F{fid}")
+
+
 def cmd_show(a):
     from . import search
+    if _is_fold_ref(a.id):
+        a.query, a.lines, a.grep, a.context, a.all_text = [a.id], None, None, 0, False
+        return cmd_unfold(a)
     with _open(a) as s:
         try:
             print(search.show(s, a.id, around=a.around))
@@ -481,20 +544,33 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(fn=lambda a: cmd_reject(a) if a.rejected else cmd_decide(a))
     sp = text_cmd("checkpoint", cmd_handoff, argparse.SUPPRESS, (("--reason",), {"help": argparse.SUPPRESS}))
     for name in ("context", "unfold"):
-        sp = add(name, cmd_search, argparse.SUPPRESS)
-        sp.add_argument("query", nargs="*")
-        sp.add_argument("--query", dest="query_opt")
+        sp = add(name, cmd_unfold if name == "unfold" else cmd_search,
+                 "exact text of a fold: F12 [--lines A-B | --grep PAT]" if name == "unfold" else argparse.SUPPRESS)
+        sp.add_argument("query", nargs="*", metavar="F<id>")
+        sp.add_argument("--query", dest="query_opt", help=argparse.SUPPRESS)
         sp.add_argument("--fold-id", help=argparse.SUPPRESS)
-        sp.add_argument("--limit", type=int, default=12)
+        sp.add_argument("--limit", type=int, default=12, help=argparse.SUPPRESS)
         sp.add_argument("--budget", type=int, help=argparse.SUPPRESS)
-        sp.add_argument("--json", action="store_true")
+        sp.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
+        sp.add_argument("--lines", metavar="A-B", help="only these lines")
+        sp.add_argument("--grep", metavar="PAT", help="only lines matching PAT (regex, case-insensitive)")
+        sp.add_argument("--context", type=int, default=0, metavar="N", help="lines around each --grep hit")
+        sp.add_argument("--all", dest="all_text", action="store_true", help="no size cap")
         sp.set_defaults(kind=None, all=False, no_code=False)
+    sp = text_cmd("fold", cmd_fold, "fold a turn range or piped text behind an anchored summary",
+                  (("--turns",), {"metavar": "M40-M88", "help": "conversation span to fold"}),
+                  (("--stdin",), {"action": "store_true", "help": "fold text read from stdin"}),
+                  (("--title",), {"help": "short label"}))
     return p
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if argv and argv[0] in DEPRECATED:  # old flags (e.g. fold --target) must not trip argparse
+    if argv and argv[0] == "fold" and any(x.startswith(("--target", "--budget", "--keep")) for x in argv):
+        print("agres fold: v0 window folding (--target/--budget) is gone. Origami 1.1 folds big tool output "
+              "automatically; fold a span yourself with `agres fold \"<summary>\" --turns M40-M88`.")
+        return 0
+    if argv and argv[0] in DEPRECATED:  # old flags must not trip argparse
         print(f"agres {argv[0]}: {DEPRECATED[argv[0]]}")
         return 0
     parser = build_parser()

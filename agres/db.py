@@ -14,9 +14,11 @@ from typing import Any, Iterable, Iterator, Optional, Sequence
 
 from . import paths
 from .code.graphops import CODE_SCHEMA, GraphOps
+from .fold import SCHEMA as FOLD_SCHEMA
 from .util import now_iso
 
-SCHEMA_VERSION = 100  # v0.x stores have user_version 0; the unreleased 1.0 engine used 1
+SCHEMA_VERSION = 101  # 101: origami folds. v0.x stores have user_version 0; the unreleased 1.0 engine used 1
+V1_VERSIONS = (100, 101)  # 100 upgrades to 101 in place (additive tables only)
 
 MEMORY_SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -60,7 +62,7 @@ CREATE INDEX IF NOT EXISTS turns_session ON turns(session_id, id);
 CREATE UNIQUE INDEX IF NOT EXISTS turns_dedupe ON turns(session_id, role, COALESCE(prompt_id, ''), hash);
 """
 
-FTS_TABLES = ("fts_items", "fts_turns", "fts_code")
+FTS_TABLES = ("fts_items", "fts_turns", "fts_code", "fts_folds")
 V0_MARKERS = {"folds", "window_items", "compaction_artifacts", "context_packs"}
 
 
@@ -114,6 +116,9 @@ class Store(GraphOps):
             raise NewerSchema(f"{self.path} has schema {ver}; this agres understands {SCHEMA_VERSION}. Upgrade agres.")
         if ver == SCHEMA_VERSION:
             return
+        if ver in V1_VERSIONS:
+            self._upgrade(ver)
+            return
         tables = {r[0] for r in self.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if ver != 0 or tables & V0_MARKERS or "sessions" in tables:
             raise V0Store(f"{self.path} is a v0 agres store; run `agres migrate`")
@@ -121,18 +126,30 @@ class Store(GraphOps):
             raise NoStore(f"{self.path} is not an agres store")
         self._create_schema(fts)
 
+    def _upgrade(self, ver: int) -> None:
+        """100 -> 101: add the fold tables, same FTS mode as the rest of the store."""
+        with self.tx():
+            if self.db.execute("PRAGMA user_version").fetchone()[0] != ver:
+                return  # another process upgraded meanwhile
+            for stmt in _split_sql(FOLD_SCHEMA):
+                self.db.execute(stmt)
+            self._fts_table("fts_folds", self.get_meta("fts") == "1")
+            self.db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+
+    def _fts_table(self, t: str, use_fts: bool) -> None:
+        if use_fts:
+            self.db.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS {t} USING fts5(body, "
+                            "tokenize='unicode61 remove_diacritics 2')")
+        else:
+            self.db.execute(f"CREATE TABLE IF NOT EXISTS {t}(rowid INTEGER PRIMARY KEY, body TEXT)")
+
     def _create_schema(self, fts: Optional[bool]) -> None:
         with self.tx():
-            for stmt in _split_sql(MEMORY_SCHEMA) + _split_sql(CODE_SCHEMA):
+            for stmt in _split_sql(MEMORY_SCHEMA) + _split_sql(CODE_SCHEMA) + _split_sql(FOLD_SCHEMA):
                 self.db.execute(stmt)
             use_fts = fts if fts is not None else _fts5_available(self.db)
             for t in FTS_TABLES:
-                if use_fts:
-                    self.db.execute(
-                        f"CREATE VIRTUAL TABLE IF NOT EXISTS {t} USING fts5(body, "
-                        "tokenize='unicode61 remove_diacritics 2')")
-                else:
-                    self.db.execute(f"CREATE TABLE IF NOT EXISTS {t}(rowid INTEGER PRIMARY KEY, body TEXT)")
+                self._fts_table(t, use_fts)
             self.set_meta("fts", "1" if use_fts else "0")
             self.set_meta("created_at", now_iso())
             self.db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")

@@ -142,7 +142,7 @@ class CliTest(TempHome):
         self.assertIn("garbage collector", pack)
         self.assertIn("pointer", self.agres("context", "--query", "pointer").stdout)
         self.assertIn("pointer", self.agres("unfold", "--query", "pointer").stdout)
-        self.assertIn("removed in agres 1.0", self.agres("fold", "--target", "0").stdout)
+        self.assertIn("v0 window folding", self.agres("fold", "--target", "0").stdout)
         with db.Store(self.root) as s:
             rows = s.q("SELECT kind, status, session_id FROM items ORDER BY id")
             self.assertTrue(all(r["session_id"] == sid for r in rows))

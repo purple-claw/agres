@@ -14,7 +14,7 @@ from typing import Iterable, Optional
 from .memory import KINDS, LIVE, fmt_id, live_clause, parse_id
 from .util import ago, terms, truncate
 
-WEIGHT = {"item": 1.0, "turn": 0.6, "code": 0.5}
+WEIGHT = {"item": 1.0, "fold": 0.7, "turn": 0.6, "code": 0.5}
 RRF_K = 20
 SNIPPET = 160
 
@@ -94,6 +94,14 @@ def search(store, query: str, kinds: Optional[Iterable[str]] = None, include_tur
             "id": fmt_id("turn", r["id"]), "kind": "turn", "status": r["role"], "title": "",
             "snippet": _snippet(r["text"], words), "created_at": r["created_at"]} for r in rows]))
 
+    if (not kinds or "fold" in kinds) and store.one("SELECT 1 FROM sqlite_master WHERE name='folds'"):
+        rows = _ranked(store, "fts_folds", "folds t ON t.id=fts_folds.rowid", "", [], words, limit * 2)
+        lists.append(("fold", [{
+            "id": f"F{r['id']}", "kind": "fold", "status": r["kind"], "title": r["title"],
+            "snippet": truncate(r["title"] + " · " + _snippet((r["summary"] or "") + "\n" + (r["body"] or "")[:200_000],
+                                                               words), SNIPPET + 60),
+            "created_at": r["created_at"]} for r in rows]))
+
     if include_code and (not kinds or "code" in kinds):
         lists.append(("code", _code_hits(store, query, limit)))
 
@@ -130,6 +138,8 @@ def format_hits(hits: list[dict]) -> str:
     for h in hits:
         if h["kind"] == "turn":
             lines.append(f"{h['id']} {h['status']} · {ago(h['created_at'])} · {h['snippet']}")
+        elif h["kind"] == "fold":
+            lines.append(f"{h['id']} fold:{h['status']} · {ago(h['created_at'])} · {h['snippet']}")
         elif h["kind"] == "code":
             lines.append(f"code {h['status']} {h['snippet']}")
         else:

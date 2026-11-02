@@ -27,6 +27,7 @@ KINDS = {
 }
 PREFIX = {k: v[0] for k, v in KINDS.items()}
 PREFIX["turn"] = "M"
+PREFIX["fold"] = "F"
 KIND_BY_PREFIX = {v: k for k, v in PREFIX.items()}
 
 # statuses that still "hold" (shown in the pack, matched by similar())
@@ -55,7 +56,7 @@ def parse_id(text: str) -> tuple[Optional[str], int]:
         raise ValueError(f"not an agres id: {text!r}")
     p = m.group(1).upper()
     if p and p not in KIND_BY_PREFIX:
-        raise ValueError(f"unknown id prefix {p!r} (use P D T E N H for items, M for turns)")
+        raise ValueError(f"unknown id prefix {p!r} (use P D T E N H for items, M for turns, F for folds)")
     return (KIND_BY_PREFIX[p] if p else None), int(m.group(2))
 
 
