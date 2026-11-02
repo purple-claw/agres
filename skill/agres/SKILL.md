@@ -30,7 +30,7 @@ and the *record* whole: anything folded is one `agres unfold F<id>` away, byte f
 tail. If what you need is not there, unfold the smallest piece that answers the question:
 
 ```bash
-agres unfold F12 --grep "error|FAILED" --context 3   # matching lines with neighbours
+agres unfold F12 --grep error --grep FAILED --context 3   # lines containing either (literal), with neighbours
 agres unfold F12 --lines 1770-1800                   # a window around a salient line number
 agres unfold F12 --all                               # everything (only when you truly need it all)
 ```
@@ -114,7 +114,7 @@ Before re-reading large parts of the repo, re-asking the user, or redoing an inv
 agres search "efuse rollback"     # items, folds, past turns, code symbols — one line per hit, with ID
 agres show D41                     # exact text, why, what it replaced / was replaced by
 agres show M340 --around 2         # an earlier exchange with its neighbours
-agres unfold F12 --grep "timeout"  # inside a fold
+agres unfold F12 --grep timeout    # inside a fold (literal; --regex RE for patterns)
 agres map --query "mqtt auth"      # ranked code skeleton, useful in an unfamiliar codebase
 ```
 

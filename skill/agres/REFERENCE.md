@@ -15,7 +15,7 @@ Every command accepts `--session ID` (provenance stamp) and `-C DIR` (run as if 
 |---|---|
 | `agres search WORDS… [--kind K]… [--all] [--no-code] [--limit N] [--json]` | Ranked hits across memory items, folds, conversation turns and code symbols (weighted reciprocal-rank fusion; AND-matches before OR-matches). `--all` includes closed and superseded items. Kinds: pin, decision, task, error, note, handoff, fold, turn, code. |
 | `agres show ID [--around N]` | Exact text of an item (`D12`) with why, files, source tag, and the replaces / superseded-by chain; for a turn (`M40`), `--around N` adds N turns either side from the same session; for a fold (`F3`), same as `unfold F3`. |
-| `agres unfold F<id> [--lines A-B] [--grep PAT] [--context N] [--all]` | Exact text of a fold. Bounded to 200 lines / 16,000 chars unless `--all`; `--grep` is a case-insensitive regex with line numbers. |
+| `agres unfold F<id> [--lines A-B] [--grep TEXT]… [--regex RE] [--context N] [--all]` | Exact text of a fold. Lines are counted on `\n` only, like a shell. Bounded to 200 lines / 16,000 chars unless `--all` (a longer single line is shown cut, never dropped). `--grep` is a literal, case-insensitive substring, repeatable (any matches); `--regex` is an opt-in Python regex checked against the first 4,000 chars of each line. |
 | `agres brain [--query Q] [--budget TOKENS \| --chars N]` | Prints the memory block (same as the SessionStart hook). `--query` adds a "Related" section. |
 | `agres map [--query Q] [--focus FILE]… [--tokens N]` | Aider-style code skeleton: files ranked by personalised PageRank with their top signatures, fitted to ~N tokens. Indexes on first use. |
 
@@ -32,7 +32,7 @@ Every command accepts `--session ID` (provenance stamp) and `-C DIR` (run as if 
 | `agres handoff TEXT` | H — supersedes the previous handoff | — |
 | `agres fold SUMMARY (--turns M40-M88 \| --stdin) [--title T]` | F (manual fold) | `forget F<id>` |
 | `agres done ID… [--note N]` / `agres drop ID… [--note N]` | — | — |
-| `agres forget ID… [--session SID] [--dry-run]` | items: redacts text permanently (tombstone row kept); turns (`M…`), `--session SID` and folds (`F…`): deleted | — |
+| `agres forget ID… [--session SID] [--dry-run]` | items: redacts text permanently (tombstone row kept, status kept if already closed); turns (`M…`) and folds (`F…`): deleted; `--session SID`: that session's turns and tool/agent folds deleted (its handoffs and span summaries stay). The ID prefix must match the item's kind. | — |
 
 Every write prints up to 3 similar live items so near-duplicates can be replaced instead of
 added. Items are never hard-deleted; replaced items get status `superseded` and a link to their
@@ -48,7 +48,7 @@ delete them.
 | `agres index [--full]` / `agres touch FILE…` | Sync the code graph / re-parse specific files (global edge resolution is deferred to the next query). |
 | `agres on` / `agres off` | Resume / pause capture and injection for this project (`.agres/off`). |
 | `agres config [KEY [VALUE]] [--project]` | Show or set settings (global by default). |
-| `agres gc [--turns-older-than DAYS] [--dry-run]` | Optimise FTS and VACUUM; optionally prune old turns (items are never pruned). `--dry-run` prints the cutoff and count and deletes nothing. |
+| `agres gc [--turns-older-than DAYS] [--dry-run]` | Optimise FTS and VACUUM; optionally prune turns older than DAYS (> 0; items are never pruned). `--dry-run` prints the cutoff and count and deletes nothing. |
 | `agres migrate [ROOT] [--all] [--dry-run] [--rollback] [--global] [--routes FILE]` | Upgrade 0.x stores. |
 | `agres install [--plugin] [--dry-run] [--yes]` / `agres uninstall` / `agres doctor` | Wire hooks, skill links and the shim (or, with `--plugin`, hand hooks and the Claude skill to the plugin); undo; verify every skill folder and flag double wiring. |
 | `agres hook EVENT` | Internal: run a Claude Code hook with its JSON on stdin. |
@@ -60,18 +60,18 @@ only the model's view is folded. Previews are deterministic, never an LLM summar
 
 | Kind | Trigger | Body |
 |---|---|---|
-| tool | PostToolUse (sync) on Bash: stdout or stderr over `fold_chars` (default 12,000) | full output; the model gets the first `fold_head` (40) lines, ≤ 30 numbered salient lines (error, fail, exception, traceback, warning, panic, fatal, assert, denied, undefined, not found), the last `fold_tail` (20) lines and a stub `[agres fold F12: N lines, K KB folded …]` |
+| tool | PostToolUse (sync) on Bash: stdout or stderr over `fold_chars` (default 12,000) | full output; the model gets the first `fold_head` (40) lines, ≤ 30 numbered salient lines (every previewed line cut at 300 chars, the whole preview ≤ 6,000 chars) (error, fail, exception, traceback, warning, panic, fatal, assert, denied, undefined, not found), the last `fold_tail` (20) lines and a stub `[agres fold F12: N lines, K KB folded …]` |
 | agent | PostToolUse (async) on `Agent`/`Task` | subagent brief + result |
 | span | PostCompact | none; points at turns `M<a>–M<b>` since the previous span fold; summary = `compact_summary` |
 | manual | `agres fold` | `--turns` range and/or `--stdin` text |
 
-Never folded: output of `agres` commands (no unfold → refold loop), interrupted calls, images,
+Never folded: output of a command that runs `agres` (in command position: start, after `;`/`&&`/`|`/`(`/quotes/backticks/`$(`, as a path ending in `/agres`, or `python -m agres` — so no unfold → refold loop; `cd ~/Dev/agres && make` still folds), interrupted calls, images,
 `Read` results (Edit needs them), anything with `fold off` or the project off.
 
 How it reaches the window: a PostToolUse hook may return
 `{"hookSpecificOutput": {"hookEventName": "PostToolUse", "updatedToolOutput": {...}}}`; the value
 must be an object shaped like `tool_response` (`stdout`, `stderr`, …) — a plain string is ignored.
-Verified on Claude Code 2.1.316 by probe; if a future version ignores it, output passes through
+Over ~30,000 chars Claude Code itself keeps the full output in a file and hands the hook only the first 30,000 chars plus `persistedOutputPath`; the fold stores that whole file, so unfold stays exact. Verified on Claude Code 2.1.316 by probe (a 92 KB build log reached the model as ~2.5k chars with its error line); if a future version ignores it, output passes through
 unfolded (safe), and `python3 -m agres.evalrun` will still pass while the live probe would not.
 
 Research behind the design (2024–2026): Context-Folding branch/return (arXiv 2510.11967),
@@ -136,7 +136,7 @@ failures are written to `.agres/hook.log`.
 | `capture` | `all` | `all` (prompts + replies), `prompts`, or `none` |
 | `skip_prefixes` | harness markers | Prompts starting with these are not stored as human turns |
 | `turn_retention_days` | `0` | > 0: session end deletes captured turns and tool/agent folds older than this (once a day). Items are never pruned. |
-| `redact_patterns` | `[]` | Extra regexes replaced by `[redacted]` before anything is stored (comma-separated on the CLI). Best effort. |
+| `redact_patterns` | `[]` | Extra regexes replaced by `[redacted]` before anything is stored. CLI: one regex (`agres config redact_patterns 'ACME-[0-9]{1,6}'`) or a JSON list (`'["a\\d+", "b"]'`). Best effort. |
 | `fold` | `true` | Origami tool/agent folds |
 | `fold_chars` | `12000` | Fold a Bash stdout/stderr longer than this (floor 1000) |
 | `fold_head` / `fold_tail` | `40` / `20` | Lines kept verbatim at the top / bottom of a folded output |
