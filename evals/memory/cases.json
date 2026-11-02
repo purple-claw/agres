@@ -1,0 +1,39 @@
+{
+  "about": "Project-memory eval for agres. Categories follow MemoryAgentBench (accurate retrieval, selective forgetting / updates) and LongMemEval-style abstention, adapted to coding-agent memory. Origami cases follow the context-folding literature: unfold must be exact, folded previews must keep the artifacts (errors, paths).",
+  "items": [
+    {"key": "mqtt", "kind": "decision", "text": "Use MQTT on port 1884 for app to board traffic; HTTP only for auth via admin-api.", "why": "LAN auth"},
+    {"key": "mqtt_old", "kind": "decision", "text": "Use MQTT on port 1883 without TLS for app traffic."},
+    {"key": "efuse", "kind": "pin", "text": "Never burn eFuses on the dev board: zero brick tolerance, no sacrificial board.", "critical": true},
+    {"key": "blue_dot", "kind": "decision", "status": "rejected", "text": "Blue centre dot in the app launcher icon.", "why": "user wants the ring only"},
+    {"key": "knx", "kind": "error", "text": "KNX tunnel drops after ten minutes without keepalive."},
+    {"key": "runbook", "kind": "task", "text": "Secure boot runbook stage 2: rollback test on the dev board."},
+    {"key": "topics", "kind": "note", "text": "MQTT topic map: loads/getLoads, loads/setLoads, scenes/apply."},
+    {"key": "flutter", "kind": "pin", "text": "Flutter app id stays com.okas.okas_smarthome; never rename the package."},
+    {"key": "yocto", "kind": "decision", "text": "Yocto MACHINE is imx8mm-okas; build dir build-okas, poky scarthgap."},
+    {"key": "ota", "kind": "decision", "text": "OTA updates use RAUC A/B slots with signed bundles."},
+    {"key": "polling", "kind": "decision", "status": "rejected", "text": "HTTP polling of load states every second.", "why": "battery and broker load"}
+  ],
+  "supersede": [{"old": "mqtt_old", "new": "mqtt"}],
+  "recall": [
+    {"query": "which port does mqtt use", "expect": "mqtt"},
+    {"query": "efuse burn dev board", "expect": "efuse"},
+    {"query": "knx keepalive drops", "expect": "knx"},
+    {"query": "rollback test secure boot", "expect": "runbook"},
+    {"query": "topic names for loads", "expect": "topics"},
+    {"query": "android package name flutter", "expect": "flutter"},
+    {"query": "yocto machine build directory", "expect": "yocto"},
+    {"query": "over the air update slots", "expect": "ota"},
+    {"query": "icon centre dot colour", "expect": "blue_dot"},
+    {"query": "poll load state http", "expect": "polling"}
+  ],
+  "stale": [{"query": "mqtt port 1883 tls", "must_not": "mqtt_old"}],
+  "abstain": ["kubernetes ingress annotations", "postgres vacuum tuning", "stripe webhook signature"],
+  "guard": [
+    {"prompt": "let's add a blue centre dot to the launcher icon", "expect": "blue_dot"},
+    {"prompt": "just poll the http load states every second", "expect": "polling"}
+  ],
+  "fold": {"lines": 4000, "salient": {"1777": "src/knx.c:212: error: 'tunnel' undeclared", "3001": "FAILED tests/test_ota.py::test_slot_switch - AssertionError"}},
+  "thresholds": {"recall_at_3": 0.9, "stale_errors": 0, "abstain_rate": 1.0, "guard_rate": 1.0,
+                 "pack_within_budget": true, "unfold_exact": true, "salient_kept": 1.0,
+                 "fold_ratio_max": 0.1, "session_start_p95_ms": 300, "fold_hook_small_p95_ms": 150}
+}
