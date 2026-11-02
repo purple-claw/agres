@@ -187,6 +187,32 @@ _SECRETS = [
 ]
 
 
+_PRIVATE_TAG = re.compile(r"<(/?)private>", re.I)
+
+
+def _strip_private(text: str) -> str:
+    """Replace each outermost <private>…</private> (nesting-aware; an unclosed one runs to the end)."""
+    if "<" not in text:
+        return text
+    out, depth, start, pos = [], 0, 0, 0
+    for m in _PRIVATE_TAG.finditer(text):
+        if not m.group(1):
+            if depth == 0:
+                out.append(text[pos:m.start()])
+                start = m.start()
+            depth += 1
+        elif depth:
+            depth -= 1
+            if depth == 0:
+                out.append("[private]")
+                pos = m.end()
+    if depth:
+        out.append("[private]")
+    else:
+        out.append(text[pos:])
+    return "".join(out)
+
+
 _EXTRA: list = []  # user `redact_patterns`, installed by config.load()
 
 
@@ -195,6 +221,8 @@ def set_extra_patterns(patterns) -> list[str]:
     those are skipped, never raised — a bad pattern must not break a hook."""
     global _EXTRA
     good, bad = [], []
+    if isinstance(patterns, str):  # a hand-edited config may hold one pattern, not a list
+        patterns = [patterns]
     for p in patterns or ():
         try:
             good.append(re.compile(p))
@@ -209,7 +237,7 @@ def redact(text: str) -> str:
     Best effort: anything that matches no pattern is stored as written."""
     if not text:
         return text
-    text = _PRIVATE.sub("[private]", text)
+    text = _strip_private(text)
     for pat in _SECRETS:
         text = pat.sub("[redacted]", text)
     for pat in _EXTRA:

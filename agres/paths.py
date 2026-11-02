@@ -61,7 +61,8 @@ def _git_owner(cur: str) -> Optional[str]:
 def find_root(start: Optional[str] = None) -> Optional[str]:
     env = os.environ.get("AGRES_ROOT")
     if env:
-        return os.path.realpath(env)
+        real = os.path.realpath(env)
+        return None if is_forbidden_root(real) else real
     first = cur = os.path.realpath(start or os.getcwd())
     while not is_forbidden_root(cur):  # 1. nearest existing store (zeus topics, a project above a submodule)
         if os.path.isfile(db_path(cur)):

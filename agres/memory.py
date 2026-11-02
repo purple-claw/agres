@@ -172,9 +172,10 @@ def forget(store, iid: int) -> None:
         raise ValueError(f"no item {iid}")
     ts = now_iso()
     with store.tx():
+        status = _FORGET[it["kind"]] if it["status"] in LIVE[it["kind"]] else it["status"]  # keep done/superseded
         store.x("UPDATE items SET title='[forgotten]', text='[forgotten]', why=NULL, close_note=NULL,"
                 " files=NULL, status=?, updated_at=?, closed_at=COALESCE(closed_at, ?) WHERE id=?",
-                (_FORGET[it["kind"]], ts, ts, iid))
+                (status, ts, ts, iid))
         store.x("DELETE FROM fts_items WHERE rowid=?", (iid,))
 
 

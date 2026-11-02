@@ -51,6 +51,16 @@ def _session(args, s: db.Store) -> Optional[str]:
     return memory.resolve_session(s, getattr(args, "session", None))
 
 
+def _checked_item(s: db.Store, ref: str) -> int:
+    """Item id for `ref`, refusing a prefix that names another kind (`forget T1` must not hit D1)."""
+    n = _item_id(ref)
+    kind, _ = parse_id(ref)
+    it = memory.get_item(s, n)
+    if not it or (kind and it["kind"] != kind):
+        raise UserError(f"no item {str(ref).strip().upper()}")
+    return n
+
+
 def _item_id(ref: str) -> int:
     try:
         kind, n = parse_id(ref)
@@ -77,7 +87,7 @@ def _record(args, kind: str, status: Optional[str] = None, priority: int = 0, wh
             source: str = "agent") -> None:
     with _open(args) as s:
         text = _text(args)
-        replaces = _item_id(args.replaces) if getattr(args, "replaces", None) else None
+        replaces = _checked_item(s, args.replaces) if getattr(args, "replaces", None) else None
         if kind == "handoff":
             iid = memory.add_handoff(s, text, source=source, session_id=_session(args, s))
         else:
@@ -135,11 +145,12 @@ def cmd_handoff(a):
 def _close(a, verb: str):
     with _open(a) as s:
         for ref in a.ids:
+            n = _checked_item(s, ref)
             try:
-                old, new = memory.close_item(s, _item_id(ref), verb, note=a.note)
+                old, new = memory.close_item(s, n, verb, note=a.note)
             except ValueError as e:
                 raise UserError(str(e))
-            it = memory.get_item(s, _item_id(ref))
+            it = memory.get_item(s, n)
             print(f"{fmt_id(it['kind'], it['id'])} {old} → {new}")
 
 
@@ -165,15 +176,19 @@ def cmd_forget(a):
             if kind == "turn":
                 if not s.one("SELECT 1 FROM turns WHERE id=?", (n,)):
                     raise UserError(f"no turn {ref.upper()}")
-                turns.append(n)
+                if n not in turns:
+                    turns.append(n)
             elif kind == "fold":
                 if not fold.get(s, n):
                     raise UserError(f"no fold {ref.upper()}")
-                folds.append(n)
+                if n not in folds:
+                    folds.append(n)
             else:
-                if not memory.get_item(s, n):
-                    raise UserError(f"no item {ref.upper()}")
-                items.append((ref.upper(), n))
+                n = _checked_item(s, ref)
+                it = memory.get_item(s, n)
+                ref_id = fmt_id(it["kind"], n)
+                if (ref_id, n) not in items:
+                    items.append((ref_id, n))
         if a.session:
             st = memory.turns_of_session(s, a.session)
             sf = [r[0] for r in s.q("SELECT id FROM folds WHERE session_id=? AND kind IN ('tool','agent') "
@@ -214,7 +229,14 @@ def cmd_search(a):
     query = " ".join(a.query or []) or a.query_opt or ""
     if not query.strip():
         raise UserError("search needs words")
-    kinds = [k.rstrip("s") if k.rstrip("s") in memory.KINDS else k for k in (a.kind or [])]
+    known = set(memory.KINDS) | {"turn", "fold", "code"}
+    kinds = []
+    for k in a.kind or []:
+        k = k.lower().strip()
+        k = k[:-1] if k not in known and k.endswith("s") else k
+        if k not in known:
+            raise UserError(f"unknown --kind {k!r} (one of: {', '.join(sorted(known))})")
+        kinds.append(k)
     with _open(a) as s:
         hits = search.search(s, query, kinds=kinds, include_closed=a.all, include_code=not a.no_code,
                              limit=a.limit)
@@ -319,7 +341,7 @@ def cmd_touch(a):
 
 
 def cmd_init(a):
-    target = a.dir or os.getcwd()
+    target = a.dir or a.path or os.getcwd()
     if not a.dir and not a.here:
         root = paths.find_root(target)
         if root and os.path.exists(os.path.join(root, ".git")):
@@ -370,6 +392,8 @@ def cmd_config(a):
         print(json.dumps(config.load(root), indent=2, sort_keys=True))
         return
     if a.value is None:
+        if a.key not in config.DEFAULTS:
+            raise UserError(f"unknown setting {a.key!r} (one of: {', '.join(config.DEFAULTS)})")
         print(json.dumps(config.load(root).get(a.key)))
         return
     try:

@@ -51,10 +51,27 @@ V0_NOTICE = ("This project has an Agres v0 store (.agres/agres.db). Its memory i
 NEWER_NOTICE = "This project's Agres store was written by a newer agres; upgrade agres to use it."
 
 
+_STR_FIELDS = ("prompt", "last_assistant_message", "compact_summary", "cwd", "prompt_id", "source", "reason",
+               "trigger", "session_title", "tool_name", "hook_event_name")
+
+
+def _clean(payload: dict) -> dict:
+    """Hook JSON comes from outside: wrong-typed fields become empty instead of raising."""
+    p = dict(payload)
+    for k in _STR_FIELDS:
+        if k in p and not isinstance(p[k], str):
+            p[k] = ""
+    sid = p.get("session_id")
+    p["session_id"] = str(sid) if isinstance(sid, (str, int)) and not isinstance(sid, bool) else ""
+    if not isinstance(p.get("tool_input"), dict):
+        p["tool_input"] = {}
+    return p
+
+
 class _Ctx:
     def __init__(self, event: str, payload: dict):
         self.event = event
-        self.p = payload
+        self.p = payload = _clean(payload)
         self.sid = payload.get("session_id") or ""
         self.cwd = payload.get("cwd") or os.getcwd()
         self.root = paths.find_root(self.cwd)

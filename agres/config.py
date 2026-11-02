@@ -33,6 +33,19 @@ DEFAULTS: dict[str, Any] = {
 }
 
 
+def _gitignore(d: str) -> None:
+    """A project `.agres/` must never be committed, whoever creates it first."""
+    if os.path.basename(d.rstrip(os.sep)) != ".agres":
+        return
+    gi = os.path.join(d, ".gitignore")
+    if not os.path.exists(gi):
+        try:
+            with open(gi, "w", encoding="utf-8") as fh:
+                fh.write("*\n")
+        except OSError:
+            pass
+
+
 def global_path() -> str:
     return os.environ.get("AGRES_CONFIG") or os.path.join(os.path.expanduser("~"), ".config", "agres", "config.json")
 
@@ -52,6 +65,7 @@ def _read(path: str) -> dict:
 
 def _write(path: str, data: dict) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    _gitignore(os.path.dirname(path))
     tmp = f"{path}.{os.getpid()}.tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=2, sort_keys=True)
@@ -143,6 +157,7 @@ def set_off(root: str, off: bool) -> None:
     flag = off_flag(root)
     if off:
         os.makedirs(os.path.dirname(flag), exist_ok=True)
+        _gitignore(os.path.dirname(flag))
         with open(flag, "w", encoding="utf-8") as fh:
             fh.write("agres is off for this project; `agres on` re-enables it\n")
     elif os.path.exists(flag):
