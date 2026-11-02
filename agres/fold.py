@@ -144,7 +144,7 @@ def stub(fid: int, text: str) -> str:
     n = line_count(text)
     kb = len(text.encode("utf-8", "replace")) / 1024
     return (f"[agres fold F{fid}: {n} lines, {kb:.0f} KB folded out of context · exact text: "
-            f"`agres unfold F{fid} --lines A-B` | `--grep PATTERN` | `--all`]")
+            f"`agres unfold F{fid} --lines A-B` | `--grep TEXT` | `--all`]")
 
 
 # --------------------------------------------------------------- tool folds
