@@ -153,7 +153,8 @@ keeps memory but stops folding.
 
 - The memory block says the store is v0 → `agres migrate` (keeps a backup, `--rollback` undoes).
 - "no agres project here" → you're outside a git checkout; `agres init` creates a store.
-- `agres status` shows memory, origami, privacy settings and attention items; `agres doctor` checks
+- `agres status` shows memory, origami, privacy settings and attention items (`agres dash` is the
+  full-screen view); `agres doctor` checks
   the plugin, hooks and every skill folder (stale copies, double wiring).
 - Agents without hooks (Codex, opencode, Cursor): REFERENCE.md → "Without hooks".
 

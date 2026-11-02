@@ -415,6 +415,12 @@ def cmd_status(a):
         print(status.render(s, deep=a.deep or a.cmd == "trace", as_json=a.json))
 
 
+def cmd_dash(a):
+    from . import dash
+    with _open(a, create=False) as s:
+        return dash.cli(a, s)
+
+
 def cmd_gc(a):
     with _open(a, create=False) as s:
         n = 0
@@ -544,6 +550,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("status", cmd_status, "what's stored, index health, settings", aliases=["trace"])
     sp.add_argument("--deep", action="store_true")
     sp.add_argument("--json", action="store_true")
+    sp = add("dash", cmd_dash, "full-screen dashboard: memory, next session, origami, activity, hooks, code, privacy",
+             aliases=["dashboard"])
+    sp.add_argument("--watch", type=float, metavar="SECS", help="redraw every SECS seconds (Ctrl-C quits)")
+    sp.add_argument("--json", action="store_true", help="the dashboard data as JSON")
+    sp.add_argument("--width", type=int, help="columns (default: terminal width)")
+    sp.add_argument("--no-color", action="store_true")
     add("on", cmd_onoff, "re-enable capture and injection for this project")
     add("off", cmd_onoff, "pause capture and injection for this project")
     sp = add("config", cmd_config, "show or set settings")
