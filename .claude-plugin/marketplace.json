@@ -1,0 +1,14 @@
+{
+  "name": "agres",
+  "description": "Agres: project memory and Origami context folding for Claude Code.",
+  "owner": {
+    "name": "Nitin (purple-claw)"
+  },
+  "plugins": [
+    {
+      "name": "agres",
+      "source": "./",
+      "description": "Project memory + Origami context folding for Claude Code."
+    }
+  ]
+}

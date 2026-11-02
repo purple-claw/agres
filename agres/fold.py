@@ -42,6 +42,7 @@ SALIENT_CHARS = 300
 UNFOLD_LINES = 200
 UNFOLD_CHARS = 16_000
 INDEX_BODY_CHARS = 200_000
+MIN_FOLD_CHARS = 1000  # matches the fast path in __main__.py
 AGRES_CMD = re.compile(r"(^|[\s;&|(/])agres(\s|$)")
 
 
@@ -120,7 +121,7 @@ def tool_fold(store, payload: dict, cfg: dict, session_id: Optional[str] = None)
     cmd = str((payload.get("tool_input") or {}).get("command") or "")
     if AGRES_CMD.search(cmd):
         return None  # unfold output must stay unfolded
-    limit = int(cfg.get("fold_chars") or 12000)
+    limit = max(MIN_FOLD_CHARS, int(cfg.get("fold_chars") or 12000))
     new = dict(resp)
     changed = False
     for key in ("stdout", "stderr"):

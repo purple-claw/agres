@@ -51,7 +51,9 @@ def hook_entries(agres_cmd: str) -> dict:
         "SessionStart": [{"matcher": "", "hooks": [cmd("session-start", 10)]}],
         "UserPromptSubmit": [{"hooks": [cmd("prompt", 5)]}],
         "Stop": [{"hooks": [cmd("stop", 30, True)]}],
-        "PostToolUse": [{"matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash", "hooks": [cmd("edit", 60, True)]}],
+        "PostToolUse": [{"matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash", "hooks": [cmd("edit", 60, True)]},
+                        {"matcher": "Bash", "hooks": [cmd("fold", 10)]},
+                        {"matcher": "Agent|Task", "hooks": [cmd("agent-fold", 30, True)]}],
         "PostCompact": [{"hooks": [cmd("post-compact", 30, True)]}],
         "SessionEnd": [{"matcher": "", "hooks": [cmd("session-end", 5)]}],
     }

@@ -1,0 +1,66 @@
+{
+  "name": "agres",
+  "displayName": "Agres",
+  "version": "1.1.0",
+  "description": "Project memory + Origami context folding for Claude Code. Hooks inject decisions, rejections, constraints, open work and handoffs at session start and after /compact; big Bash output is folded out of the window and unfolded exactly by ID. Local SQLite per repo, stdlib Python.",
+  "author": {
+    "name": "Nitin (purple-claw)",
+    "url": "https://github.com/purple-claw"
+  },
+  "homepage": "https://github.com/purple-claw/agres",
+  "repository": "https://github.com/purple-claw/agres",
+  "license": "MIT",
+  "keywords": [
+    "memory",
+    "project-memory",
+    "context",
+    "folding",
+    "origami",
+    "hooks",
+    "sqlite"
+  ],
+  "skills": "./skill/",
+  "userConfig": {
+    "capture": {
+      "type": "string",
+      "title": "Conversation capture",
+      "description": "Store prompts and replies (all), prompts only, or nothing. Decisions and other items are always kept.",
+      "options": [
+        "all",
+        "prompts",
+        "none"
+      ],
+      "default": "all"
+    },
+    "turn_retention_days": {
+      "type": "number",
+      "title": "Keep captured turns (days)",
+      "description": "Delete captured turns and raw tool folds older than this at session end. 0 keeps them forever.",
+      "default": 0,
+      "min": 0,
+      "max": 3650
+    },
+    "budget_chars": {
+      "type": "number",
+      "title": "Memory block size (chars)",
+      "description": "Size of the memory injected at session start and after /compact.",
+      "default": 6000,
+      "min": 400,
+      "max": 9000
+    },
+    "fold": {
+      "type": "boolean",
+      "title": "Origami folding",
+      "description": "Fold big Bash output out of the context window (exact text stays one `agres unfold F<id>` away).",
+      "default": true
+    },
+    "fold_chars": {
+      "type": "number",
+      "title": "Fold threshold (chars)",
+      "description": "Fold a Bash stdout/stderr longer than this.",
+      "default": 12000,
+      "min": 1000,
+      "max": 1000000
+    }
+  }
+}
