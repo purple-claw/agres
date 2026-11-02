@@ -224,3 +224,25 @@ class SpanAndAgentFoldHookTest(HookTest):
             self.assertIn("Find MQTT auth code", f["title"])
             self.assertIn("admin-api/auth.py:40", fold.unfold(s, f["id"], all_=True))
             self.assertIn("Where is MQTT auth?", f["body"])
+
+
+class PersistedOutputTest(HookTest):
+    """Claude Code keeps outputs over ~30k chars in a file (`persistedOutputPath`) and hands hooks only
+    the first 30,000 chars. The fold must hold the full file so unfold stays exact (probe, 2.1.316)."""
+
+    def test_full_persisted_output_is_folded(self):
+        full = big_output(6000) + "\nLAST LINE marker"
+        path = self.write(self.home, "tool-results/abc.txt", full)
+        resp = {"stdout": full[:30000], "stderr": "", "interrupted": False, "isImage": False,
+                "noOutputExpected": False, "persistedOutputPath": path, "persistedOutputSize": len(full)}
+        raw = self.run_hook("fold", tool_name="Bash", tool_input={"command": "make"}, tool_response=resp)
+        new = json.loads(raw)["hookSpecificOutput"]["updatedToolOutput"]
+        self.assertIn("LAST LINE marker", new["stdout"])
+        self.assertEqual(new["persistedOutputPath"], path)
+        with self.store() as s:
+            self.assertEqual(fold.unfold(s, 1, all_=True), full)
+
+    def test_unreadable_persisted_path_falls_back_to_given_text(self):
+        resp = {"stdout": big_output(3000), "stderr": "", "persistedOutputPath": "/nonexistent/x.txt"}
+        raw = self.run_hook("fold", tool_name="Bash", tool_input={"command": "make"}, tool_response=resp)
+        self.assertIn("agres fold F1", raw)

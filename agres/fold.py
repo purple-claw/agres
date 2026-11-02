@@ -103,8 +103,12 @@ def preview(text: str, head: int = 40, tail: int = 20) -> str:
     return "\n".join(out + bottom)
 
 
+def line_count(text: str) -> int:
+    return text.count("\n") + (0 if not text or text.endswith("\n") else 1)
+
+
 def stub(fid: int, text: str) -> str:
-    n = text.count("\n") + 1
+    n = line_count(text)
     kb = len(text.encode("utf-8", "replace")) / 1024
     return (f"[agres fold F{fid}: {n} lines, {kb:.0f} KB folded out of context · exact text: "
             f"`agres unfold F{fid} --lines A-B` | `--grep PATTERN` | `--all`]")
@@ -128,16 +132,37 @@ def tool_fold(store, payload: dict, cfg: dict, session_id: Optional[str] = None)
         text = resp.get(key)
         if not isinstance(text, str) or len(text) <= limit:
             continue
+        if key == "stdout":
+            text = _persisted(resp) or text
         fid = add_fold(store, "tool", f"{payload.get('tool_name')} {key}: {truncate(cmd, 60)}",
                        f"{key} of `{truncate(cmd, 200)}`", body=text,
                        meta={"tool": payload.get("tool_name"), "stream": key, "command": cmd,
-                             "lines": text.count("\n") + 1, "chars": len(text),
+                             "lines": line_count(text), "chars": len(text),
                              "tool_use_id": payload.get("tool_use_id")},
                        session_id=session_id)
         new[key] = preview(text, int(cfg.get("fold_head") or 40), int(cfg.get("fold_tail") or 20)) \
             + "\n" + stub(fid, text)
         changed = True
     return new if changed else None
+
+
+PERSISTED_MAX = 50 * 1024 * 1024
+
+
+def _persisted(resp: dict) -> Optional[str]:
+    """Claude Code keeps an output over ~30k chars in a file and gives hooks only its first 30,000 chars
+    (`persistedOutputPath`, `persistedOutputSize`; seen on 2.1.316). Fold the whole file so unfold is exact."""
+    path = resp.get("persistedOutputPath")
+    if not isinstance(path, str) or not path:
+        return None
+    try:
+        import os
+        if os.path.getsize(path) > PERSISTED_MAX:
+            return None
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return None
 
 
 def agent_fold(store, payload: dict, session_id: Optional[str] = None) -> Optional[int]:
