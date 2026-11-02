@@ -40,6 +40,53 @@ def H(*parts: str) -> str:
     return os.path.join(os.path.expanduser("~"), *parts)
 
 
+# Every place an agent may look for skills on this machine. ~/.agents/skills was missed by 1.0
+# and kept a stale v0.5 "Origami" copy alive (audit finding 1).
+SKILL_ROOTS = ((".agents", "skills"), (".agent-skills",), (".claude", "skills"), (".codex", "skills"))
+CLAUDE_SKILL = (".claude", "skills", "agres")
+
+
+def skill_version(skill_dir: str) -> str:
+    try:
+        with open(os.path.join(skill_dir, "SKILL.md"), encoding="utf-8") as fh:
+            text = fh.read(8192)
+    except OSError:
+        return "no SKILL.md"
+    m = re.search(r'^\s*version:\s*"?([\w.\-]+)"?', text, re.M)
+    if m:
+        return m.group(1)
+    if re.search(r"origami|fold/unfold|default_enabled", text, re.I):
+        return "v0.5 (old Origami context-window skill)"
+    return "unknown"
+
+
+def scan_skill_roots() -> list[dict]:
+    """What sits at <root>/agres for every skill root that exists: ours | link (elsewhere) | copy | missing."""
+    out = []
+    for parts in SKILL_ROOTS:
+        root = H(*parts)
+        if not os.path.isdir(root):
+            continue
+        path = os.path.join(root, "agres")
+        if not os.path.lexists(path):
+            state, version = "missing", ""
+        elif _link_target(path) == os.path.realpath(SKILL_SRC):
+            state, version = "ours", __version__
+        else:
+            state = "link" if os.path.islink(path) else "copy"
+            version = skill_version(path)
+        out.append({"path": path, "state": state, "version": version, "target": _link_target(path)})
+    return out
+
+
+def plugin_enabled() -> Optional[str]:
+    """`agres@<marketplace>` when Claude Code has the agres plugin enabled, else None."""
+    enabled = _read_json(H(".claude", "settings.json")).get("enabledPlugins") or {}
+    if not isinstance(enabled, dict):
+        return None
+    return next((k for k, v in enabled.items() if k.split("@", 1)[0] == "agres" and v), None)
+
+
 def hook_entries(agres_cmd: str) -> dict:
     def cmd(event: str, timeout: int, run_async: bool = False) -> dict:
         h = {"type": "command", "command": f"{agres_cmd} hook {event}", "timeout": timeout}
@@ -120,24 +167,35 @@ def _link_target(path: str) -> Optional[str]:
     return os.path.realpath(path) if os.path.lexists(path) else None
 
 
-def build_plan() -> Plan:
+def build_plan(plugin: bool = False) -> Plan:
+    """Settings-hook install (default) or `--plugin`: the Claude Code plugin owns hooks and the Claude
+    skill, so the settings hooks and ~/.claude/skills/agres go; other agents' skill roots stay linked."""
     p = Plan()
     shim = H(".local", "bin", "agres")
     if _link_target(shim) != os.path.realpath(SHIM_SRC):
         p.add("link", f"{shim} -> {SHIM_SRC}", path=shim, target=SHIM_SRC)
-    for link in (H(".agent-skills", "agres"), H(".claude", "skills", "agres"), H(".codex", "skills", "agres")):
+    for parts in SKILL_ROOTS:
+        link = H(*parts, "agres")
         if not os.path.isdir(os.path.dirname(link)):
+            continue
+        if plugin and parts + ("agres",) == CLAUDE_SKILL:
+            if os.path.lexists(link):
+                p.add("unlink", f"remove {link} (the agres plugin provides the Claude Code skill)", path=link)
             continue
         if _link_target(link) == os.path.realpath(SKILL_SRC) or _points_at(link, H(".agent-skills", "agres")):
             continue  # already ours, or chains through ~/.agent-skills/agres (re-linked above)
-        p.add("link", f"{link} -> {SKILL_SRC}", path=link, target=SKILL_SRC)
+        what = "" if not os.path.lexists(link) else f" (replaces {skill_version(link)}; old copy archived)"
+        p.add("link", f"{link} -> {SKILL_SRC}{what}", path=link, target=SKILL_SRC)
     settings = H(".claude", "settings.json")
     if os.path.isdir(H(".claude")):
         cur = _read_json_strict(settings)
-        new = with_agres_hooks(cur, shim)
+        new = strip_agres_hooks(json.loads(json.dumps(cur))) if plugin else with_agres_hooks(cur, shim)
         if new != cur:
-            p.add("settings", f"{settings}: agres hooks for SessionStart, UserPromptSubmit, Stop, PostToolUse, "
-                              "PostCompact, SessionEnd (legacy agres-*.sh entries removed)", path=settings, data=new)
+            desc = (f"{settings}: remove agres hooks (the plugin's hooks/hooks.json runs them now; "
+                    "other hooks untouched)" if plugin else
+                    f"{settings}: agres hooks for SessionStart, UserPromptSubmit, Stop, PostToolUse, "
+                    "PostCompact, SessionEnd (legacy agres-*.sh entries removed)")
+            p.add("settings", desc, path=settings, data=new)
         for name in LEGACY_HOOKS:
             f = H(".claude", "hooks", name)
             if os.path.exists(f):
@@ -236,6 +294,12 @@ def apply(p: Plan) -> list:
             _atomic_write(path, body)
         elif kind == "archive":
             _archive(path, p.archive, manifest)
+        elif kind == "unlink":
+            if os.path.islink(path):
+                manifest.append({"op": "unlinked", "path": path, "was": os.readlink(path)})
+                os.unlink(path)
+            elif os.path.lexists(path):
+                _archive(path, p.archive, manifest)
         _save_manifest(p, manifest)
     return manifest
 
@@ -335,16 +399,36 @@ def doctor(cwd: Optional[str] = None) -> list[tuple[bool, str]]:
                 f"`agres` on PATH → {os.path.realpath(which) if which else 'missing'} (want {SHIM_SRC})"))
     skill_md = os.path.join(SKILL_SRC, "SKILL.md")
     out.append(_check_skill(skill_md))
-    for link in (H(".claude", "skills", "agres"), H(".codex", "skills", "agres"), H(".agent-skills", "agres")):
-        if os.path.lexists(link) or os.path.isdir(os.path.dirname(link)):
-            ok = _link_target(link) == os.path.realpath(SKILL_SRC)
-            out.append((ok, f"skill {link} → {_link_target(link) or 'missing'}"))
+    plugin = plugin_enabled()
+    claude_skill = H(*CLAUDE_SKILL)
+    for r in scan_skill_roots():
+        if r["path"] == claude_skill and plugin:
+            if r["state"] == "missing":
+                out.append((True, f"skill {r['path']}: none (the plugin provides it)"))
+            else:
+                out.append((False, f"double wiring: plugin {plugin} and {r['path']} both list an agres skill "
+                                   "→ agres install --plugin"))
+        elif r["state"] == "ours":
+            out.append((True, f"skill {r['path']} → {r['target']}"))
+        elif r["state"] == "missing":
+            out.append((False, f"skill {r['path']}: missing → agres install"))
+        else:
+            out.append((False, f"skill {r['path']}: stale {r['state']} ({r['version']}) at {r['target']} "
+                               "→ agres install archives it and links this checkout"))
     settings = _read_json(H(".claude", "settings.json"))
     cmds = [h.get("command", "") for gs in (settings.get("hooks") or {}).values() for g in gs for h in g.get("hooks", [])]
-    for event, groups in hook_entries("agres").items():
-        want = groups[0]["hooks"][0]["command"].split(" ", 1)[1]
-        n = sum(1 for c in cmds if c.endswith(want) and _is_agres_hook({"command": c}))
-        out.append((n == 1, f"hook {event}: {n} × `{want}`" + ("" if n == 1 else " (want exactly 1)")))
+    if plugin:
+        wired = [c for c in cmds if _is_agres_hook({"command": c})]
+        out.append((True, f"plugin {plugin} enabled: hooks come from its hooks/hooks.json"))
+        if wired:
+            out.append((False, f"double wiring: {len(wired)} agres hook(s) still in ~/.claude/settings.json fire "
+                               "next to the plugin's → agres install --plugin"))
+    else:
+        for event, groups in hook_entries("agres").items():
+            for g in groups:
+                want = g["hooks"][0]["command"].split(" ", 1)[1]
+                n = sum(1 for c in cmds if c.endswith(want) and _is_agres_hook({"command": c}))
+                out.append((n == 1, f"hook {event}: {n} × `{want}`" + ("" if n == 1 else " (want exactly 1)")))
     legacy = [c for c in cmds if any(x in c for x in LEGACY_HOOKS)]
     out.append((not legacy, "no legacy agres-*.sh hooks" if not legacy else f"legacy hooks still wired: {legacy}"))
     root = paths.find_root(cwd or os.getcwd())
@@ -392,7 +476,7 @@ def cli(a) -> int:
         print("\n".join(steps) if steps else "nothing to undo")
         return 0
     try:
-        plan = build_plan()
+        plan = build_plan(plugin=bool(getattr(a, "plugin", False)))
     except ValueError as e:
         print(f"agres install: {e}")
         return 1
@@ -401,6 +485,9 @@ def cli(a) -> int:
         return 0
     for _, desc, _ in plan.steps:
         print(f"- {desc}")
+    print("\ncapture policy: prompts and final replies are stored per repo in .agres/agres.db (redaction is best "
+          "effort). Change: `agres config capture prompts|none`, `agres config turn_retention_days 30`; "
+          "delete: `agres forget M<id>`.")
     if a.dry_run or not a.yes:
         print("\n(dry run — re-run with --yes to apply; replaced files go to ~/.agres-archive/)")
         return 0

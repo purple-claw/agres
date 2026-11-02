@@ -530,6 +530,9 @@ def build_parser() -> argparse.ArgumentParser:
         sp = add(name, cmd_install, h)
         sp.add_argument("--dry-run", action="store_true")
         sp.add_argument("--yes", action="store_true")
+        if name == "install":
+            sp.add_argument("--plugin", action="store_true",
+                            help="the agres Claude Code plugin owns hooks + skill: remove the settings wiring")
 
     # compatibility (zeus, old habits)
     sp = add("start", cmd_start, argparse.SUPPRESS)
