@@ -1,4 +1,7 @@
-"""Settings: built-in defaults ← ~/.config/agres/config.json ← <root>/.agres/config.json.
+"""Settings: built-in defaults ← ~/.config/agres/config.json ← plugin options ← <root>/.agres/config.json.
+
+Plugin options reach hooks as `CLAUDE_PLUGIN_OPTION_<KEY>` env vars (Claude Code `userConfig`); an
+unset, empty or invalid one is ignored.
 
 The per-project off switch is a flag file (`.agres/off`) so hooks can check it
 without opening the database.
@@ -16,6 +19,13 @@ DEFAULTS: dict[str, Any] = {
     "budget_chars": 6000,   # injection pack size (hard max 9000)
     "guard": True,          # flag rejected ideas / critical pins that a prompt touches
     "capture": "all",       # all | prompts | none
+    "turn_retention_days": 0,  # >0: session end deletes captured turns + tool folds older than this
+    "redact_patterns": [],  # extra regexes redacted before storing (after the built-in shapes)
+    "fold": True,           # origami: fold big tool output in the live window (PostToolUse)
+    "fold_chars": 12000,    # fold a stdout/stderr longer than this
+    "fold_head": 40,        # lines kept verbatim from the top / bottom of a folded output
+    "fold_tail": 20,
+    "fold_tools": ["Bash"],
     "skip_prefixes": [      # harness-generated prompts that aren't human turns
         "<task-notification", "<system-reminder", "<agent-message", "[SYSTEM NOTIFICATION",
         "<local-command-", "<command-name>", "Caveat: The messages below were generated",
@@ -49,11 +59,31 @@ def _write(path: str, data: dict) -> None:
     os.replace(tmp, path)
 
 
+PLUGIN_OPTIONS = ("capture", "turn_retention_days", "budget_chars", "fold", "fold_chars")
+
+
+def plugin_options(env: Optional[dict] = None) -> dict:
+    env = os.environ if env is None else env
+    out = {}
+    for key in PLUGIN_OPTIONS:
+        raw = env.get(f"CLAUDE_PLUGIN_OPTION_{key.upper()}") or env.get(f"CLAUDE_PLUGIN_OPTION_{key}")
+        if raw is None or not str(raw).strip():
+            continue
+        try:
+            out[key] = coerce(key, str(raw).strip())
+        except ValueError:
+            continue
+    return out
+
+
 def load(root: Optional[str] = None) -> dict:
     cfg = dict(DEFAULTS)
     cfg.update(_read(global_path()))
+    cfg.update(plugin_options())
     if root:
         cfg.update(_read(project_path(root)))
+    from .util import set_extra_patterns
+    set_extra_patterns(cfg.get("redact_patterns") or [])
     return cfg
 
 
@@ -77,9 +107,20 @@ def coerce(key: str, raw: str) -> Any:
             return False
         raise ValueError(f"{key} expects on/off")
     if isinstance(default, int):
-        return int(raw)
+        val = int(raw)
+        if val < 0:
+            raise ValueError(f"{key} must be ≥ 0")
+        return val
     if isinstance(default, list):
-        return [x.strip() for x in raw.split(",") if x.strip()]
+        vals = [x.strip() for x in raw.split(",") if x.strip()]
+        if key == "redact_patterns":
+            import re
+            for v in vals:
+                try:
+                    re.compile(v)
+                except re.error as e:
+                    raise ValueError(f"redact_patterns: {v!r} is not a valid regex ({e})")
+        return vals
     if key == "capture" and raw not in ("all", "prompts", "none"):
         raise ValueError("capture expects all | prompts | none")
     return raw

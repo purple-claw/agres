@@ -254,6 +254,21 @@ def delete_turns(store, ids: Iterable[int]) -> int:
     return n
 
 
+def prune_raw_folds(store, cutoff_iso: str) -> int:
+    """Tool/agent folds are raw capture: retention removes them like turns. No-op before schema 101."""
+    if not store.one("SELECT 1 FROM sqlite_master WHERE name='folds'"):
+        return 0
+    ids = [r[0] for r in store.q("SELECT id FROM folds WHERE kind IN ('tool','agent') AND created_at < ?",
+                                 (cutoff_iso,))]
+    with store.tx():
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            ph = ",".join("?" * len(chunk))
+            store.x(f"DELETE FROM fts_folds WHERE rowid IN ({ph})", chunk)
+            store.x(f"DELETE FROM folds WHERE id IN ({ph})", chunk)
+    return len(ids)
+
+
 def search_turn_ids(store, word: str) -> list[int]:
     """Turn ids whose search row mentions `word` (FTS or LIKE fallback)."""
     if store.fts:

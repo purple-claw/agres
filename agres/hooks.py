@@ -25,7 +25,7 @@ import traceback
 from typing import Any, Optional, TextIO
 
 from . import config, db, memory, pack, paths
-from .util import truncate
+from .util import cutoff_iso, now_iso, truncate
 
 ALIASES = {"SessionStart": "session-start", "UserPromptSubmit": "prompt", "Stop": "stop",
            "PostToolUse": "edit", "PostCompact": "post-compact", "SessionEnd": "session-end"}
@@ -157,12 +157,28 @@ def on_post_compact(c: _Ctx) -> None:
     return None
 
 
+def _retention(s: db.Store, cfg: dict) -> int:
+    """Delete raw capture (turns, tool/agent folds) older than `turn_retention_days`, at most once a day."""
+    days = int(cfg.get("turn_retention_days") or 0)
+    if days <= 0:
+        return 0
+    last = s.get_meta("last_retention")
+    if last and last > cutoff_iso(1):
+        return 0
+    cut = cutoff_iso(days)
+    n = memory.delete_turns(s, memory.turns_older_than(s, cut))
+    n += memory.prune_raw_folds(s, cut)
+    s.set_meta("last_retention", now_iso())
+    return n
+
+
 def on_session_end(c: _Ctx) -> None:
     if c.root is None or not c.sid or config.is_off(c.root):
         return None
     s = c.store(create_ok=False)
     if s is None:
         return None
+    _retention(s, c.cfg)
     memory.end_session(s, c.sid, c.p.get("reason"))
     meta_keys = (f"files:{c.sid}", f"guard:{c.sid}")
     files = json.loads(s.get_meta(meta_keys[0]) or "[]")

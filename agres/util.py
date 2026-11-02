@@ -187,12 +187,32 @@ _SECRETS = [
 ]
 
 
+_EXTRA: list = []  # user `redact_patterns`, installed by config.load()
+
+
+def set_extra_patterns(patterns) -> list[str]:
+    """Install user redaction regexes (applied after the built-ins). Returns the ones that don't compile;
+    those are skipped, never raised — a bad pattern must not break a hook."""
+    global _EXTRA
+    good, bad = [], []
+    for p in patterns or ():
+        try:
+            good.append(re.compile(p))
+        except (re.error, TypeError):
+            bad.append(p)
+    _EXTRA = good
+    return bad
+
+
 def redact(text: str) -> str:
-    """Strip <private>…</private> spans and well-known secret shapes before storing."""
+    """Strip <private>…</private> spans, well-known secret shapes and user patterns before storing.
+    Best effort: anything that matches no pattern is stored as written."""
     if not text:
         return text
     text = _PRIVATE.sub("[private]", text)
     for pat in _SECRETS:
+        text = pat.sub("[redacted]", text)
+    for pat in _EXTRA:
         text = pat.sub("[redacted]", text)
     return text
 
